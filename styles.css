@@ -414,3 +414,47 @@ tbody tr:hover { background: #f0f5fb; }
   .dashboard-actions { margin-left: 0; }
   .stats { flex-direction: column; }
 }
+
+/* ---------- Legenda de resultados ---------- */
+.legend-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.legend-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.legend-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 14px;
+  color: #33414e;
+  line-height: 1.5;
+}
+.legend-list .badge {
+  flex-shrink: 0;
+  min-width: 108px;
+  text-align: center;
+}
+.badge-apto { background: var(--ok-bg); color: var(--ok); }
+.badge-inapto { background: var(--bad-bg); color: var(--bad); }
+.badge-regularizar { background: var(--warn-bg); color: var(--warn); }
+.badge-erro { background: var(--bad-bg); color: var(--bad); }
+.legend-note {
+  margin: 14px 0 0;
+  font-size: 12px;
+  border-top: 1px solid #e2e8f0;
+  padding-top: 10px;
+}
+
+@media screen and (max-width: 720px) {
+  .legend-list li { flex-direction: column; gap: 4px; }
+  .legend-list .badge { min-width: 0; align-self: flex-start; }
+}

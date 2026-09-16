@@ -3,7 +3,7 @@
 (function () {
   var cfg = {
     SUPABASE_URL: 'https://wipthjinvcyglbeuxxsb.supabase.co',
-    SUPABASE_ANON_KEY: 'PREENCHER_ANON_KEY',
+    SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndpcHRoamludmN5Z2xiZXV4eHNiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1MjUxMzAsImV4cCI6MjEwNTEwMTEzMH0.s-IShdUxLV0o4tIpLutnpo9sMDivmQu34n1oqwmm0pA',
   };
 
   try {

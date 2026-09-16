@@ -335,7 +335,7 @@
 
     state.client
       .from('batches')
-      .insert({ filename: pending.filename, total: pending.records.length, status: 'processing' })
+      .insert({ filename: pending.filename, total: pending.records.length, status: 'processing', user_id: state.session.user.id })
       .select('id')
       .single()
       .then(function (res) {

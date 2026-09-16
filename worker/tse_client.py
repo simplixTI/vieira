@@ -356,13 +356,18 @@ class TseHttpClient(TseClientBase):
         return token
 
     # ── Consulta de situação (CPF-only): token CPF + situacao-eleitoral ──
+    # 400 com body vazio/`[]` = CPF sem registro no TSE (observado no piloto):
+    # é um resultado VÁLIDO (não-cadastrado), não um erro técnico.
     def _consultar_situacao(self, cpf: str) -> dict:
         token = self._obter_token(cpf)
         r = self._request_com_retry(
             "POST", URL_SITUACAO,
             headers=self._headers_consulta(token, cpf),
             json={},
+            aceitar_400_vazio=True,
         )
+        if r.status_code == 400:
+            return parse_resultado_json({}, cpf)  # NAO_CADASTRADO_TSE, encontrado=False
         try:
             dados = r.json()
         except Exception:
@@ -378,7 +383,11 @@ class TseHttpClient(TseClientBase):
         Onde votar (zona/seção/município/local) via token ALUMINIO_CPF.
         Fallback automático p/ consulta de situação (CPF-only) quando:
           • faltam mãe/data (ou data não parseia) — nem tenta o grant rico;
-          • o grant rejeita mãe+data com 401 (dados divergentes do TSE).
+          • o grant rejeita mãe+data com 401 (dados divergentes do TSE);
+          • o onde-votar responde 403 "Acesso negado" (observado p/ alguns
+            CPFs, provavelmente CANCELADO/SUSPENSO/TRANSFERIDO cujo local de
+            votação não é liberado) — situação/título/biometria vêm do CPF-only;
+            só zona/seção/município ficam em branco (fiel à fonte).
         """
         self._respeitar_pacing()  # 1 pacing por CPF, aqui (fallback não re-pacing)
         data_iso = _para_iso(data_nascimento)
@@ -395,16 +404,36 @@ class TseHttpClient(TseClientBase):
             print(f"      ⤵️  mãe/data rejeitadas pelo TSE (401) — fallback p/ "
                   f"SITUAÇÃO (CPF-only), CPF …{cpf[-4:]}")
             return self._consultar_situacao(cpf)
-        r = self._request_com_retry(
-            "POST", URL_ONDE_VOTAR,
-            headers=self._headers_consulta(token, cpf),
-            json={},
-        )
+        try:
+            r = self._request_com_retry(
+                "POST", URL_ONDE_VOTAR,
+                headers=self._headers_consulta(token, cpf),
+                json={},
+                aceitar_400_vazio=True,
+            )
+        except TseHttpError as e:
+            if "403" in str(e):
+                # local de votação não liberado p/ este CPF → CPF-only
+                self._avisar_403()
+                return self._consultar_situacao(cpf)
+            raise
+        if r.status_code == 400:
+            return parse_resultado_json({}, cpf)  # sem registro no TSE
         try:
             dados = r.json()
         except Exception:
             raise TseHttpError(f"TSE: resposta do onde-votar não-JSON: {(r.text or '')[:200]}")
         return parse_resultado_json(dados, cpf)
+
+    #: contador p/ logar o 403 do onde-votar só na 1ª vez (depois em silêncio)
+    _contagem_403 = 0
+
+    def _avisar_403(self) -> None:
+        TseHttpClient._contagem_403 += 1
+        if TseHttpClient._contagem_403 == 1:
+            print("      ⤵️  onde-votar respondeu 403 'Acesso negado' — usando "
+                  "SITUAÇÃO (CPF-only) p/ estes CPFs (fica sem zona/seção). "
+                  "(avisado 1x; próximos 403 são contados em silêncio)")
 
     # ── Fluxo de consulta (dispatcher de modo) ──
     def _consultar(self, modo: str, cpf: str, nome_mae: "str | None",
@@ -415,9 +444,11 @@ class TseHttpClient(TseClientBase):
         return self._consultar_situacao(cpf)
 
     # ── request com retry exponencial em 429/5xx/rede/JSON inválido ──
+    # aceitar_400_vazio: 400 com body vazio/`[]` = CPF sem registro no TSE
+    # (observado no piloto) — o CALLER trata como não-cadastrado, não erro.
     def _request_com_retry(self, method: str, url: str, headers: dict,
                            params: dict = None, json: dict = None,
-                           data: dict = None):
+                           data: dict = None, aceitar_400_vazio: bool = False):
         backoff = 2.0
         ultima_exc: "Exception | None" = None
         for tentativa in range(1, self.tentativas + 1):
@@ -440,6 +471,9 @@ class TseHttpClient(TseClientBase):
                     continue
                 raise TseHttpError(f"TSE: HTTP {r.status_code} persistiu após "
                                    f"{tentativa} tentativas")
+            if r.status_code == 400 and aceitar_400_vazio \
+                    and (r.text or "").strip() in ("", "[]"):
+                return r  # caller decide: não-cadastrado (sem registro no TSE)
             if r.status_code != 200:
                 # 401 NÃO é retentado: token é emitido na hora, então 401 é
                 # definitivo (grant rejeitou mãe+data / credenciais). Caller

@@ -153,6 +153,11 @@ def gravar_enriquecimento(id_: int, dados: dict, sb: "Client | None" = None) -> 
     Status vai a 'ready_tse' SEMPRE — com mãe+data o cliente TSE escolhe a
     consulta de TÍTULO; sem eles, a de SITUAÇÃO (só CPF). A decisão fica no
     tse_client, não aqui.
+
+    ⚠️ O update SEMPRE acontece (mesmo com `dados` vazio): o registro entrou
+    nesta função marcado 'enriching' e PRECISA sair de lá — sem dados, vai a
+    'ready_tse' mesmo assim pra fase B fazer a consulta CPF-only. Guardar o
+    update deixava registros travados em 'enriching' pra sempre.
     """
     sb = sb or cliente_threadlocal()
     payload: dict = {"status": "ready_tse"}
@@ -165,8 +170,7 @@ def gravar_enriquecimento(id_: int, dados: dict, sb: "Client | None" = None) -> 
     titulo = (dados.get("titulo_eleitor") or "")
     if len(titulo) >= 10:
         payload["titulo_eleitoral"] = titulo
-    if len(payload) > 1:  # só grava se trouxe algo além do status
-        sb.table(TABELA).update(payload).eq("id", id_).execute()
+    sb.table(TABELA).update(payload).eq("id", id_).execute()
 
 
 # ─────────────────────────────────────────────

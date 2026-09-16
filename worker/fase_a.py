@@ -71,9 +71,15 @@ def _enriquecer_um(reg: dict) -> str:
         return "enriquecido"
 
     # nada trouxe mãe/data/título: ainda assim avança p/ TSE em modo CPF-only
+    # (o update de gravar_enriquecimento SEMPRE acontece — status ready_tse —
+    # então 'enriching' nunca fica pra trás; se a gravação falhar, marca error)
     try:
         repo.gravar_enriquecimento(reg["id"], {}, sb=sb)
     except Exception:
+        try:
+            repo.marcar(reg["id"], "error", sb=sb)
+        except Exception:
+            pass
         return "erro_gravacao"
     return "sem_dados"
 

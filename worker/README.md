@@ -61,6 +61,21 @@ Opções: `--producao` (loop), `--limite N`, `--fase a|b|ambas`, `--stub` (dry-r
 Logs em `worker/logs/worker_YYYYMMDD.log`. Se `NOTIFY_WEBHOOK_URL` estiver
 configurado, chegam avisos de lote concluído, erros e parada sem progresso.
 
+## Teto diário de consultas TSE por cliente
+
+Cada cliente do portal (`batches.user_id`) pode consumir no máximo
+`LIMITE_DIARIO_POR_CLIENTE` consultas TSE por dia (padrão **6000**; ajuste via
+variável de ambiente, `0` ou negativo = ilimitado). Vale só para a **fase B**
+(a consulta TSE — a etapa cara); o enriquecimento da fase A não consome teto.
+
+- Contagem do dia: um registro conta se virou `done` hoje (`checked_at`) ou se
+  está `error` com `updated_at` de hoje (a falha também consumiu consulta).
+  Meia-noite é a local da máquina do worker.
+- Ao atingir o teto, os registros excedentes **não são tocados**: ficam
+  `ready_tse` (sem incrementar `attempts`, sem virar `error`) e o worker
+  volta neles sozinho no dia seguinte. O lote correspondente continua
+  `processing` até zerar.
+
 ## Agendamento (mesmo padrão do export_vps/AUTOMACAO-CRMLITE.md)
 
 O worker é idempotente: com a fila vazia ele encerra em segundos. Sugestão:

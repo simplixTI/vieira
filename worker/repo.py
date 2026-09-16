@@ -30,8 +30,14 @@ TAMANHO_CHUNK = 200
 # records status='error' ficam de fora por RETRY_COOLDOWN_MIN minutos após o
 # updated_at (mantido por trigger no banco) e reentram na fila enquanto
 # attempts < MAX_TENTATIVAS; ao atingir MAX, 'error' é terminal.
-RETRY_COOLDOWN_MIN = int(os.environ.get("RETRY_COOLDOWN_MIN", "30") or 30)
+RETRY_COOLDOWN_MIN = int(os.environ.get("RETRY_COOLDOWN_MIN", "30") or "30")
 MAX_TENTATIVAS = 5
+
+# ── Teto diário de consultas TSE por cliente (batches.user_id) ──
+# Cada dono de lote consome no máximo N consultas TSE por dia; registros além
+# do teto ficam na fila (ready_tse/pending) e continuam sozinhos amanhã.
+# <= 0 = ilimitado. Vale só pra FASE B (TSE); enriquecimento não consome teto.
+LIMITE_DIARIO_POR_CLIENTE = int(os.environ.get("LIMITE_DIARIO_POR_CLIENTE", "6000") or "6000")
 
 _cfg: "ConfigWorker | None" = None
 _cliente: "Client | None" = None
@@ -135,6 +141,51 @@ def pegar_prontos_tse(limite: int = 200, sb: "Client | None" = None) -> list[dic
     for r in retries:
         r["_retry"] = True
     return prontos + retries
+
+
+# ─────────────────────────────────────────────
+# TETO DIÁRIO DE CONSULTAS TSE POR CLIENTE
+# ─────────────────────────────────────────────
+def mapa_lotes_donos(sb: "Client | None" = None) -> dict:
+    """batch_id → batches.user_id (donos dos lotes). 1 query; cachear por lote."""
+    sb = sb or cliente()
+    r = sb.table(TABELA_LOTES).select("id,user_id").execute()
+    return {b["id"]: b.get("user_id") for b in (r.data or [])}
+
+
+def consultas_hoje_por_cliente(sb: "Client | None" = None,
+                               mapa: "dict | None" = None) -> dict:
+    """
+    Consultas TSE consumidas HOJE por cliente (aproximação de negócio, não
+    contabilidade). Regra de contagem — um record conta se:
+      • checked_at >= hoje 00:00 (virou 'done' hoje), OU
+      • status='error' E updated_at >= hoje 00:00 (falhou hoje — o erro de
+        hoje também consumiu uma consulta).
+    'ready_tse'/'pending' com updated_at de hoje NÃO contam (enriquecimento
+    não consome consulta TSE).
+
+    Meia-noite local da máquina do worker (Postgres 'today' do lado do
+    servidor pode divergir do fuso — é um teto de negócio, não auditoria).
+    """
+    sb = sb or cliente()
+    hoje = datetime.now().astimezone().replace(hour=0, minute=0,
+                                              second=0, microsecond=0).isoformat()
+    feitos = (sb.table(TABELA)
+              .select("id,batch_id")
+              .gte("checked_at", hoje)
+              .execute()).data or []
+    falhos = (sb.table(TABELA)
+              .select("id,batch_id")
+              .eq("status", "error")
+              .gte("updated_at", hoje)
+              .execute()).data or []
+    mapa = mapa or mapa_lotes_donos(sb)
+    contagem: dict = {}
+    for row in feitos + falhos:
+        dono = mapa.get(row.get("batch_id"))
+        if dono is not None:
+            contagem[dono] = contagem.get(dono, 0) + 1
+    return contagem
 
 
 def contar_pendentes(sb: "Client | None" = None) -> int:

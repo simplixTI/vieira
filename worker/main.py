@@ -143,10 +143,28 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
                   limite_total: "int | None" = None) -> dict:
     regs = repo.pegar_prontos_tse(limite, sb=sb)
     stats = {"processados": 0, "apto": 0, "inapto": 0, "regularizar_tse": 0,
-             "stale": 0, "erro": 0, "retries": 0, "interrompido": False}
+             "stale": 0, "erro": 0, "retries": 0, "aguardando_limite": 0,
+             "interrompido": False}
     if not regs:
         print("  🧾 (fase B) nada com status='ready_tse' nem erros elegíveis.")
         return stats
+
+    # ── Teto diário de consultas TSE por cliente (<= 0 = ilimitado) ──
+    # Registros além do teto NÃO são tocados: ficam 'ready_tse' (sem attempts)
+    # e continuam sozinhos amanhã. Só consulta que efetivamente rodou conta
+    # (sucesso, stale ou erro — qualquer ida ao TSE).
+    limite_diario = int(getattr(repo, "LIMITE_DIARIO_POR_CLIENTE", 0) or 0)
+    mapa_donos: dict = {}
+    usados_hoje: dict = {}
+    avisados_limite: set = set()
+    if limite_diario > 0:
+        mapa_donos = repo.mapa_lotes_donos(sb)
+        usados_hoje = repo.consultas_hoje_por_cliente(sb, mapa=mapa_donos)
+        if usados_hoje:
+            print(f"  📊 fase B — consumo de hoje: "
+                  + ", ".join(f"{str(u)[:8]}={n}" for u, n in sorted(usados_hoje.items(),
+                                                                     key=lambda kv: str(kv[0])))
+                  + f" (teto {limite_diario}/cliente)")
 
     cliente_tse = tse_client.cliente()
     paca = cliente_tse.pacing_interno  # HTTP real já faz pacing interno
@@ -168,6 +186,17 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
         data_br = normalizar_data_br(data_iso) if data_iso else None
         tentativas = reg.get("attempts") or 0
 
+        # ── Teto diário por dono do lote: além do limite, NÃO toca o registro ──
+        if limite_diario > 0:
+            dono = mapa_donos.get(reg.get("batch_id"))
+            if dono is not None and usados_hoje.get(dono, 0) >= limite_diario:
+                stats["aguardando_limite"] += 1
+                if dono not in avisados_limite:
+                    avisados_limite.add(dono)
+                    print(f"  ⏸️  cliente {str(dono)[:8]} atingiu o limite diário "
+                          f"({limite_diario}) — registros aguardam amanhã.")
+                continue
+
         # Escolha da consulta: título rica (se implementada) → fallback situação
         usar_titulo = bool(mae and data_br and getattr(cliente_tse, "tem_titulo", False))
         modo = "TÍTULO" if usar_titulo else "SITUAÇÃO"
@@ -182,6 +211,10 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
         stats["processados"] += 1  # conta TODA tentativa (sucesso, stale ou erro)
         if reg.get("_retry"):
             stats["retries"] += 1
+        if limite_diario > 0:
+            dono = mapa_donos.get(reg.get("batch_id"))
+            if dono is not None:
+                usados_hoje[dono] = usados_hoje.get(dono, 0) + 1  # consulta consumida
         try:
             repo.marcar(reg["id"], "checking", sb=sb)
             if usar_titulo:
@@ -252,7 +285,8 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
     print(f"  ✅ fase B: {stats['processados']} processados "
           f"(re-tentativas: {stats['retries']}) | apto={stats['apto']} | "
           f"inapto={stats['inapto']} | regularizar_tse={stats['regularizar_tse']} | "
-          f"stale={stats['stale']} | erro={stats['erro']}")
+          f"stale={stats['stale']} | erro={stats['erro']} | "
+          f"aguardando limite diário: {stats['aguardando_limite']}")
     return stats
 
 

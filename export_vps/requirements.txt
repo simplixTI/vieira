@@ -1,0 +1,4 @@
+# Dependências do clicker (enxuto — NÃO usa selenium, o clique é físico via AutoHotkey)
+supabase>=2.0
+python-dotenv>=1.0
+requests>=2.31

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Portal de Verificação Eleitoral</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="config-error" class="config-error" hidden>
+    <h2>Configuração incompleta</h2>
+    <p>A chave do Supabase (anon key) não foi configurada. Preencha <code>SUPABASE_ANON_KEY</code> em <code>config.js</code> ou defina a chave <code>portal_anon_key</code> no localStorage do navegador.</p>
+  </div>
+
+  <div id="app" hidden>
+
+    <!-- ===================== LOGIN ===================== -->
+    <section id="view-login" class="view">
+      <div class="login-card card">
+        <h1 class="login-title">Portal de Verificação Eleitoral</h1>
+        <p class="login-subtitle">Acesse com suas credenciais para consultar listas de CPF junto ao TSE.</p>
+        <form id="form-login" autocomplete="off">
+          <div class="field">
+            <label for="login-email">E-mail</label>
+            <input type="email" id="login-email" required placeholder="seu@email.com">
+          </div>
+          <div class="field">
+            <label for="login-password">Senha</label>
+            <input type="password" id="login-password" required placeholder="••••••••">
+          </div>
+          <div id="login-error" class="msg msg-error" role="alert"></div>
+          <button type="submit" class="btn btn-primary btn-block" id="btn-login">Entrar</button>
+        </form>
+        <p class="note">O cadastro de clientes é feito pela administração. Para obter acesso, entre em contato com o responsável pelo seu contrato.</p>
+      </div>
+    </section>
+
+    <!-- ===================== UPLOAD ===================== -->
+    <section id="view-upload" class="view" hidden>
+      <header class="topbar">
+        <div class="topbar-brand">Portal de Verificação Eleitoral</div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost" id="btn-go-dashboard">Meus lotes</button>
+          <button class="btn btn-ghost" id="btn-logout-upload">Sair</button>
+        </div>
+      </header>
+
+      <main class="container">
+        <h2>Enviar nova lista de CPFs</h2>
+        <p class="muted">Arquivos aceitos: <strong>.csv</strong>, <strong>.txt</strong>, <strong>.xlsx</strong> ou <strong>.xls</strong> — até <strong>40.000 CPFs</strong> por lote.</p>
+
+        <div class="card">
+          <input type="file" id="file-input" accept=".csv,.txt,.xlsx,.xls">
+          <div id="upload-error" class="msg msg-error" role="alert"></div>
+
+          <div id="upload-summary" hidden>
+            <div class="stats">
+              <div class="stat"><span class="stat-value" id="stat-total">0</span><span class="stat-label">CPFs lidos</span></div>
+              <div class="stat stat-ok"><span class="stat-value" id="stat-aceitos">0</span><span class="stat-label">Válidos</span></div>
+              <div class="stat stat-bad"><span class="stat-value" id="stat-rejeitados">0</span><span class="stat-label">Rejeitados</span></div>
+            </div>
+
+            <div id="rejections-wrap" hidden>
+              <h3>Motivos de rejeição (primeiros 20)</h3>
+              <ul id="rejections-list" class="rejections"></ul>
+            </div>
+
+            <button class="btn btn-primary" id="btn-confirm-upload">Confirmar envio</button>
+          </div>
+
+          <div id="upload-progress" hidden>
+            <p id="upload-progress-label">Enviando registros…</p>
+            <div class="progress"><div class="progress-fill" id="upload-progress-fill"></div></div>
+          </div>
+        </div>
+
+        <p class="note lgpd-note"><strong>LGPD:</strong> os dados enviados são dados pessoais de eleitores, utilizados exclusivamente para a verificação contratada. O acesso é restrito ao lote do próprio cliente.</p>
+      </main>
+    </section>
+
+    <!-- ===================== DASHBOARD ===================== -->
+    <section id="view-dashboard" class="view" hidden>
+      <header class="topbar">
+        <div class="topbar-brand">Portal de Verificação Eleitoral</div>
+        <div class="topbar-actions">
+          <button class="btn btn-ghost" id="btn-new-upload">Novo envio</button>
+          <button class="btn btn-ghost" id="btn-logout-dashboard">Sair</button>
+        </div>
+      </header>
+
+      <main class="container">
+        <div class="dashboard-head">
+          <div class="field field-inline">
+            <label for="batch-select">Lote</label>
+            <select id="batch-select"></select>
+          </div>
+          <span id="batch-badge" class="badge"></span>
+          <div class="dashboard-actions">
+            <button class="btn btn-ghost" id="btn-refresh">Atualizar</button>
+            <button class="btn btn-primary" id="btn-export">Exportar CSV</button>
+          </div>
+        </div>
+
+        <div id="dashboard-error" class="msg msg-error" role="alert"></div>
+
+        <div class="card" id="batch-info-card" hidden>
+          <div class="batch-meta" id="batch-meta"></div>
+          <div class="progress progress-lg"><div class="progress-fill" id="batch-progress-fill"></div></div>
+          <p class="muted" id="batch-progress-label"></p>
+        </div>
+
+        <div class="cards" id="status-cards"></div>
+        <div class="cards" id="eleg-cards"></div>
+
+        <div class="card">
+          <div class="table-filters">
+            <div class="field field-inline">
+              <label for="filter-elegibilidade">Elegibilidade</label>
+              <select id="filter-elegibilidade">
+                <option value="">Todas</option>
+                <option value="apto">Apto</option>
+                <option value="inapto_cancelado">Inapto — cancelado</option>
+                <option value="inapto_suspenso">Inapto — suspenso</option>
+                <option value="inapto_transferido">Inapto — transferido</option>
+                <option value="regularizar_tse">Regularizar no TSE</option>
+              </select>
+            </div>
+            <div class="field field-inline field-grow">
+              <label for="filter-search">Buscar</label>
+              <input type="search" id="filter-search" placeholder="CPF ou nome">
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table id="records-table">
+              <thead>
+                <tr>
+                  <th>CPF</th>
+                  <th>Nome</th>
+                  <th>Elegibilidade</th>
+                  <th>Zona</th>
+                  <th>Seção</th>
+                  <th>Município</th>
+                  <th>Verificado em</th>
+                </tr>
+              </thead>
+              <tbody id="records-tbody"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination">
+            <button class="btn btn-ghost" id="btn-prev-page">← Anterior</button>
+            <span id="page-info"></span>
+            <button class="btn btn-ghost" id="btn-next-page">Próxima →</button>
+          </div>
+        </div>
+      </main>
+    </section>
+
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

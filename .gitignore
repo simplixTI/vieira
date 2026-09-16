@@ -1,0 +1,35 @@
+# Segredos e ambientes
+.env
+.env.*
+!.env.example
+!.env.*.example
+.venv/
+.venv_*/
+env_bg/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime / logs
+logs/
+*.log
+**/bridge/*.txt
+coords.ini
+.temp/
+
+# Artefatos locais do probe TSE
+portal_tse/captura_rede.json
+portal_tse/trechos_js.txt
+portal_tse/STOP
+
+# Worker
+worker/STOP
+worker/logs/
+
+# SO / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/

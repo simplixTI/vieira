@@ -196,6 +196,8 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
             notificar(f"❌ TSE worker: erro consultando CPF …{cpf[-4:]}: {e}")
             continue
 
+        desfecho = _classificar(res, cpf)
+
         if desfecho == "stale":
             stats["stale"] += 1
             # anti-stale: NÃO grava. Volta p/ ready_tse; esgotando tentativas → error

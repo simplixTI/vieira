@@ -193,8 +193,8 @@
   }
 
   function onFileSelected(ev) {
-    resetUploadView();
     var file = ev.target.files[0];
+    resetUploadView();
     if (!file) return;
 
     setMsg($('#upload-error'), 'Lendo arquivo…');

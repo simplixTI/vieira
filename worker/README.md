@@ -61,20 +61,35 @@ Opções: `--producao` (loop), `--limite N`, `--fase a|b|ambas`, `--stub` (dry-r
 Logs em `worker/logs/worker_YYYYMMDD.log`. Se `NOTIFY_WEBHOOK_URL` estiver
 configurado, chegam avisos de lote concluído, erros e parada sem progresso.
 
-## Teto diário de consultas TSE por cliente
+## Teto diário e mensal de consultas TSE por cliente
 
-Cada cliente do portal (`batches.user_id`) pode consumir no máximo
-`LIMITE_DIARIO_POR_CLIENTE` consultas TSE por dia (padrão **6000**; ajuste via
-variável de ambiente, `0` ou negativo = ilimitado). Vale só para a **fase B**
-(a consulta TSE — a etapa cara); o enriquecimento da fase A não consome teto.
+Cada cliente do portal (`batches.user_id`) pode consumir no máximo:
 
-- Contagem do dia: um registro conta se virou `done` hoje (`checked_at`) ou se
-  está `error` com `updated_at` de hoje (a falha também consumiu consulta).
-  Meia-noite é a local da máquina do worker.
-- Ao atingir o teto, os registros excedentes **não são tocados**: ficam
-  `ready_tse` (sem incrementar `attempts`, sem virar `error`) e o worker
-  volta neles sozinho no dia seguinte. O lote correspondente continua
-  `processing` até zerar.
+- `LIMITE_DIARIO_POR_CLIENTE` consultas TSE por dia (padrão **6000**); e
+- `LIMITE_MENSAL_POR_CLIENTE` consultas TSE por mês (padrão **50000**).
+
+Ajuste via variáveis de ambiente (`0` ou negativo = ilimitado). Vale só para a
+**fase B** (a consulta TSE — a etapa cara); o enriquecimento da fase A não
+consome teto. O check diário roda antes do mensal — qualquer um dos dois
+segura o registro.
+
+- Contagem do dia/mês: um registro conta se virou `done` no período
+  (`checked_at`) ou se está `error` com `updated_at` no período (a falha
+  também consumiu consulta). Meia-noite é a local da máquina do worker.
+- Ao atingir um teto, os registros excedentes **não são tocados**: ficam
+  `ready_tse` (sem incrementar `attempts`, sem virar `error`). O diário
+  libera sozinho no dia seguinte; o lote continua `processing` até zerar.
+- **Limite mensal avisa o admin uma única vez por cliente por mês**: o worker
+  grava em `public.avisos_limite` (PK user_id+mes) e dispara o webhook
+  "🚨 LIMITE MENSAL ATINGIDO" só na primeira vez — execuções seguintes no
+  mesmo mês não re-notificam.
+
+**Quando receber o aviso de limite mensal**, o admin pode: (1) subir
+`LIMITE_MENSAL_POR_CLIENTE` (env do worker) e reiniciar; (2) negociar nova
+cobrança com o cliente; ou (3) "resetar" o mês do cliente **apagando a linha
+dele em `avisos_limite` para o mês corrente** (só o aviso — o teto continua
+valendo; pra liberar de verdade é opção 1) ou (4) simplesmente esperar a
+virada do mês, que zera o aviso sozinha.
 
 ## Agendamento (mesmo padrão do export_vps/AUTOMACAO-CRMLITE.md)
 

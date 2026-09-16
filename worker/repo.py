@@ -39,6 +39,11 @@ MAX_TENTATIVAS = 5
 # <= 0 = ilimitado. Vale só pra FASE B (TSE); enriquecimento não consome teto.
 LIMITE_DIARIO_POR_CLIENTE = int(os.environ.get("LIMITE_DIARIO_POR_CLIENTE", "6000") or "6000")
 
+# ── Teto MENSAL por cliente (camada por cima do diário) ──
+# Ao atingir, o cliente para até liberação comercial e o admin recebe UM aviso
+# por mês (tabela avisos_limite — ver avisar_limite_mensal). <= 0 = ilimitado.
+LIMITE_MENSAL_POR_CLIENTE = int(os.environ.get("LIMITE_MENSAL_POR_CLIENTE", "50000") or "50000")
+
 _cfg: "ConfigWorker | None" = None
 _cliente: "Client | None" = None
 _tls = threading.local()
@@ -144,7 +149,7 @@ def pegar_prontos_tse(limite: int = 200, sb: "Client | None" = None) -> list[dic
 
 
 # ─────────────────────────────────────────────
-# TETO DIÁRIO DE CONSULTAS TSE POR CLIENTE
+# TETO DIÁRIO/MENSAL DE CONSULTAS TSE POR CLIENTE
 # ─────────────────────────────────────────────
 def mapa_lotes_donos(sb: "Client | None" = None) -> dict:
     """batch_id → batches.user_id (donos dos lotes). 1 query; cachear por lote."""
@@ -153,39 +158,85 @@ def mapa_lotes_donos(sb: "Client | None" = None) -> dict:
     return {b["id"]: b.get("user_id") for b in (r.data or [])}
 
 
-def consultas_hoje_por_cliente(sb: "Client | None" = None,
-                               mapa: "dict | None" = None) -> dict:
-    """
-    Consultas TSE consumidas HOJE por cliente (aproximação de negócio, não
-    contabilidade). Regra de contagem — um record conta se:
-      • checked_at >= hoje 00:00 (virou 'done' hoje), OU
-      • status='error' E updated_at >= hoje 00:00 (falhou hoje — o erro de
-        hoje também consumiu uma consulta).
-    'ready_tse'/'pending' com updated_at de hoje NÃO contam (enriquecimento
-    não consome consulta TSE).
+def _meia_noite_local() -> datetime:
+    return datetime.now().astimezone().replace(hour=0, minute=0,
+                                               second=0, microsecond=0)
 
-    Meia-noite local da máquina do worker (Postgres 'today' do lado do
-    servidor pode divergir do fuso — é um teto de negócio, não auditoria).
+
+def _consultas_desde(sb, inicio_iso: str, mapa: dict) -> dict:
     """
-    sb = sb or cliente()
-    hoje = datetime.now().astimezone().replace(hour=0, minute=0,
-                                              second=0, microsecond=0).isoformat()
+    Contagem de consultas TSE consumidas desde `inicio_iso`, por dono de lote.
+    Regra (aproximação de negócio, não contabilidade) — um record conta se:
+      • checked_at >= inicio (virou 'done' no período), OU
+      • status='error' E updated_at >= inicio (falhou no período — o erro
+        também consumiu uma consulta).
+    'ready_tse'/'pending' mexidos no período NÃO contam (enriquecimento não
+    consome consulta TSE).
+    """
     feitos = (sb.table(TABELA)
               .select("id,batch_id")
-              .gte("checked_at", hoje)
+              .gte("checked_at", inicio_iso)
               .execute()).data or []
     falhos = (sb.table(TABELA)
               .select("id,batch_id")
               .eq("status", "error")
-              .gte("updated_at", hoje)
+              .gte("updated_at", inicio_iso)
               .execute()).data or []
-    mapa = mapa or mapa_lotes_donos(sb)
     contagem: dict = {}
     for row in feitos + falhos:
         dono = mapa.get(row.get("batch_id"))
         if dono is not None:
             contagem[dono] = contagem.get(dono, 0) + 1
     return contagem
+
+
+def consultas_hoje_por_cliente(sb: "Client | None" = None,
+                               mapa: "dict | None" = None) -> dict:
+    """Consultas TSE consumidas HOJE (meia-noite local) por cliente."""
+    sb = sb or cliente()
+    mapa = mapa or mapa_lotes_donos(sb)
+    return _consultas_desde(sb, _meia_noite_local().isoformat(), mapa)
+
+
+def consultas_mes_por_cliente(sb: "Client | None" = None,
+                              mapa: "dict | None" = None) -> dict:
+    """Consultas TSE consumidas no MÊS CORRENTE (1º dia, meia-noite local)."""
+    sb = sb or cliente()
+    mapa = mapa or mapa_lotes_donos(sb)
+    inicio = _meia_noite_local().replace(day=1).isoformat()
+    return _consultas_desde(sb, inicio, mapa)
+
+
+# ── Aviso de limite mensal (1 por cliente por mês) ──
+TABELA_AVISOS = "avisos_limite"
+
+
+def mes_atual() -> str:
+    """Primeiro dia do mês corrente (coluna `mes` date da tabela avisos_limite)."""
+    return datetime.now().astimezone().strftime("%Y-%m-01")
+
+
+def avisar_limite_mensal(user_id: str, limite: int,
+                         sb: "Client | None" = None) -> bool:
+    """
+    Marca que o cliente atingiu o limite mensal. Retorna True se o aviso é
+    NOVO (caller deve notificar o admin); False se (user_id, mês) já consta —
+    assim o webhook dispara no máximo 1x por cliente por mês, mesmo com várias
+    execuções do worker. 'Reset' mensal = novo mês (ou apagar a linha / subir
+    o LIMITE_MENSAL_POR_CLIENTE).
+    """
+    sb = sb or cliente()
+    mes = mes_atual()
+    ex = (sb.table(TABELA_AVISOS)
+          .select("user_id")
+          .eq("user_id", user_id)
+          .eq("mes", mes)
+          .execute()).data or []
+    if ex:
+        return False
+    sb.table(TABELA_AVISOS).insert(
+        {"user_id": user_id, "mes": mes, "limite": limite}).execute()
+    return True
 
 
 def contar_pendentes(sb: "Client | None" = None) -> int:

@@ -12,8 +12,9 @@ Status do voter_records (check constraint do banco):
 `attempts` é incrementado ao marcar checking/error (conta de tentativas TSE).
 """
 
+import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from supabase import Client, ClientOptions, create_client
 
@@ -24,6 +25,13 @@ TABELA_LOTES = "batches"
 
 STATUS_ABERTOS = ("pending", "enriching", "ready_tse", "checking")
 TAMANHO_CHUNK = 200
+
+# ── Re-tentativa de erros transientes ──
+# records status='error' ficam de fora por RETRY_COOLDOWN_MIN minutos após o
+# updated_at (mantido por trigger no banco) e reentram na fila enquanto
+# attempts < MAX_TENTATIVAS; ao atingir MAX, 'error' é terminal.
+RETRY_COOLDOWN_MIN = int(os.environ.get("RETRY_COOLDOWN_MIN", "30") or 30)
+MAX_TENTATIVAS = 5
 
 _cfg: "ConfigWorker | None" = None
 _cliente: "Client | None" = None
@@ -84,14 +92,49 @@ def pegar_pendentes_enriquecimento(limite: int = 500, sb: "Client | None" = None
 
 
 def pegar_prontos_tse(limite: int = 200, sb: "Client | None" = None) -> list[dict]:
-    """Registros status='ready_tse' (já enriquecidos ou no modo CPF-only)."""
+    """
+    Registros a consultar no TSE, em duas fatias (merge determinístico):
+      1. status='ready_tse' (já enriquecidos ou modo CPF-only), por id;
+      2. se sobrar limite: status='error' ELEGÍVEIS p/ re-tentativa —
+         updated_at mais velho que RETRY_COOLDOWN_MIN (a marcação de error
+         refresha updated_at via trigger, então um erro recém-criado fica de
+         fora — sem loop infinito) E attempts < MAX_TENTATIVAS, do mais
+         antigo pro mais novo.
+
+    Registros da fatia 2 vêm com a chave auxiliar `_retry=True` (main.py
+    loga como re-tentativa). Quando attempts atinge MAX_TENTATIVAS, 'error'
+    é terminal: nada aqui os pega de volta.
+    """
     sb = sb or cliente()
-    r = (sb.table(TABELA)
-         .select("id,cpf,batch_id,nome_mae,data_nascimento,attempts")
-         .eq("status", "ready_tse")
-         .limit(limite)
-         .execute())
-    return r.data or []
+    limite = max(1, int(limite or 1))
+    cols = "id,cpf,batch_id,nome_mae,data_nascimento,attempts"
+
+    prontos = (sb.table(TABELA)
+               .select(cols)
+               .eq("status", "ready_tse")
+               .order("id")
+               .limit(limite)
+               .execute()).data or []
+
+    retries: list[dict] = []
+    restante = limite - len(prontos)
+    if restante > 0:
+        corte = (datetime.now(timezone.utc) - timedelta(minutes=RETRY_COOLDOWN_MIN)).isoformat()
+        retries = (sb.table(TABELA)
+                   .select(cols)
+                   .eq("status", "error")
+                   .lt("updated_at", corte)
+                   .lt("attempts", MAX_TENTATIVAS)
+                   .order("updated_at")
+                   .limit(restante)
+                   .execute()).data or []
+        if retries:
+            print(f"  ♻️  repo: {len(retries)} re-tentativa(s) de erro na fila "
+                  f"(cooldown {RETRY_COOLDOWN_MIN}min · attempts<{MAX_TENTATIVAS})")
+
+    for r in retries:
+        r["_retry"] = True
+    return prontos + retries
 
 
 def contar_pendentes(sb: "Client | None" = None) -> int:

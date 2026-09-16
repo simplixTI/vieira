@@ -53,7 +53,10 @@ import tse_client  # noqa: E402
 LOTE_A = 500          # registros por rodada na fase A
 LOTE_B = 200          # registros por rodada na fase B
 PAUSA_TSE = 2.5       # pacing entre consultas TSE (jitter até +1.5s → 2.5–4s)
-MAX_TENTATIVAS = 5    # stale/erro técnico repetido → status='error' (review manual)
+# MAX_TENTATIVAS vem de repo.py (mesmo valor que filtra as re-tentativas de
+# erro): stale/erro técnico repetido → status='error'; 'error' é terminal ao
+# atingir MAX — mas reentra na fila enquanto attempts < MAX (cooldown no repo).
+MAX_TENTATIVAS = repo.MAX_TENTATIVAS
 ARQUIVO_STOP = WORKER_DIR / "STOP"
 
 
@@ -140,9 +143,9 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
                   limite_total: "int | None" = None) -> dict:
     regs = repo.pegar_prontos_tse(limite, sb=sb)
     stats = {"processados": 0, "apto": 0, "inapto": 0, "regularizar_tse": 0,
-             "stale": 0, "erro": 0, "interrompido": False}
+             "stale": 0, "erro": 0, "retries": 0, "interrompido": False}
     if not regs:
-        print("  🧾 (fase B) nada com status='ready_tse'.")
+        print("  🧾 (fase B) nada com status='ready_tse' nem erros elegíveis.")
         return stats
 
     cliente_tse = tse_client.cliente()
@@ -174,7 +177,11 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
                   "(sem zona/seção/município) por enquanto.")
             aviso_titulo = True
 
-        print(f"    [{i}/{len(regs)}] CPF …{cpf[-4:]} ({modo})")
+        print(f"    [{i}/{len(regs)}] CPF …{cpf[-4:]} ({modo}"
+              f"{', re-tentativa' if reg.get('_retry') else ''})")
+        stats["processados"] += 1  # conta TODA tentativa (sucesso, stale ou erro)
+        if reg.get("_retry"):
+            stats["retries"] += 1
         try:
             repo.marcar(reg["id"], "checking", sb=sb)
             if usar_titulo:
@@ -242,7 +249,8 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
         if i < len(regs) and not paca:
             time.sleep(PAUSA_TSE + random.uniform(0, 1.5))  # 2.5–4s anti-ban
 
-    print(f"  ✅ fase B: {stats['processados']} processados | apto={stats['apto']} | "
+    print(f"  ✅ fase B: {stats['processados']} processados "
+          f"(re-tentativas: {stats['retries']}) | apto={stats['apto']} | "
           f"inapto={stats['inapto']} | regularizar_tse={stats['regularizar_tse']} | "
           f"stale={stats['stale']} | erro={stats['erro']}")
     return stats

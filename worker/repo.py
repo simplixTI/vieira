@@ -26,6 +26,11 @@ TABELA_LOTES = "batches"
 STATUS_ABERTOS = ("pending", "enriching", "ready_tse", "checking")
 TAMANHO_CHUNK = 200
 
+# Marca do lote "Consultas avulsas" (1 por usuário no portal — CPFs digitados um
+# a um). Processados PRIMEIRO nas duas fases para o cliente ver o resultado em
+# segundos. O lote nunca é fechado por `atualizar_batches`.
+AVULSA_FILENAME = "__avulsas__"
+
 # ── Re-tentativa de erros transientes ──
 # records status='error' ficam de fora por RETRY_COOLDOWN_MIN minutos após o
 # updated_at (mantido por trigger no banco) e reentram na fila enquanto
@@ -91,15 +96,45 @@ def _em_chunks(seq, n: int):
 # ─────────────────────────────────────────────
 # LEITURA
 # ─────────────────────────────────────────────
-def pegar_pendentes_enriquecimento(limite: int = 500, sb: "Client | None" = None) -> list[dict]:
-    """Registros status='pending' (id, cpf, batch_id + campos já existentes)."""
+def _ids_lotes_avulsas(sb: "Client | None" = None) -> list[str]:
+    """batch_ids de todos os lotes 'Consultas avulsas' (1 por usuário)."""
     sb = sb or cliente()
-    r = (sb.table(TABELA)
-         .select("id,cpf,batch_id,nome,nome_mae,data_nascimento")
-         .eq("status", "pending")
-         .limit(limite)
-         .execute())
-    return r.data or []
+    r = (sb.table(TABELA_LOTES).select("id")
+         .eq("filename", AVULSA_FILENAME).execute())
+    return [b["id"] for b in (r.data or [])]
+
+
+def pegar_pendentes_enriquecimento(limite: int = 500, sb: "Client | None" = None) -> list[dict]:
+    """Registros status='pending' (id, cpf, batch_id + campos já existentes).
+
+    Avulsas primeiro (cliente digitou 1 CPF e está aguardando); depois o resto.
+    """
+    sb = sb or cliente()
+    cols = "id,cpf,batch_id,nome,nome_mae,data_nascimento"
+    avulsa_ids = _ids_lotes_avulsas(sb)
+
+    prio: list[dict] = []
+    if avulsa_ids:
+        prio = (sb.table(TABELA).select(cols)
+                .eq("status", "pending")
+                .in_("batch_id", avulsa_ids)
+                .order("id")
+                .limit(limite)
+                .execute()).data or []
+        if prio:
+            print(f"  ⚡ repo: {len(prio)} avulsa(s) pendente(s) — processando primeiro")
+
+    restante = limite - len(prio)
+    if restante <= 0:
+        return prio
+    q = sb.table(TABELA).select(cols).eq("status", "pending")
+    if avulsa_ids:
+        # excluir os já pegos acima
+        pegos = [r["id"] for r in prio]
+        if pegos:
+            q = q.not_.in_("id", pegos)
+    resto = (q.limit(restante).execute()).data or []
+    return prio + resto
 
 
 def pegar_prontos_tse(limite: int = 200, sb: "Client | None" = None) -> list[dict]:
@@ -120,12 +155,31 @@ def pegar_prontos_tse(limite: int = 200, sb: "Client | None" = None) -> list[dic
     limite = max(1, int(limite or 1))
     cols = "id,cpf,batch_id,nome_mae,data_nascimento,attempts"
 
-    prontos = (sb.table(TABELA)
-               .select(cols)
-               .eq("status", "ready_tse")
-               .order("id")
-               .limit(limite)
-               .execute()).data or []
+    # Avulsas primeiro (independente do id) — o cliente está aguardando.
+    avulsa_ids = _ids_lotes_avulsas(sb)
+    prio_avulsa: list[dict] = []
+    if avulsa_ids:
+        prio_avulsa = (sb.table(TABELA).select(cols)
+                       .eq("status", "ready_tse")
+                       .in_("batch_id", avulsa_ids)
+                       .order("id")
+                       .limit(limite)
+                       .execute()).data or []
+        if prio_avulsa:
+            print(f"  ⚡ repo: {len(prio_avulsa)} avulsa(s) prontas p/ TSE — primeiro")
+
+    resto_limite = limite - len(prio_avulsa)
+    prontos_regulares: list[dict] = []
+    if resto_limite > 0:
+        q = (sb.table(TABELA).select(cols)
+             .eq("status", "ready_tse")
+             .order("id")
+             .limit(resto_limite))
+        if prio_avulsa:
+            q = q.not_.in_("id", [r["id"] for r in prio_avulsa])
+        prontos_regulares = (q.execute()).data or []
+
+    prontos = prio_avulsa + prontos_regulares
 
     retries: list[dict] = []
     restante = limite - len(prontos)
@@ -401,12 +455,18 @@ def atualizar_batches(sb: "Client | None" = None) -> list[str]:
     Retorna a lista de batch_ids finalizados nesta chamada.
     """
     sb = sb or cliente()
-    r = sb.table(TABELA_LOTES).select("id").eq("status", "processing").execute()
+    r = (sb.table(TABELA_LOTES).select("id,filename")
+         .eq("status", "processing").execute())
     lotes = r.data or []
     if not lotes:
         return []
     finalizados: list[str] = []
     for lote in lotes:
+        # Lote de "Consultas avulsas" NUNCA fecha — o cliente pode digitar
+        # mais CPFs a qualquer momento; deixar em 'processing' mantém o
+        # auto-refresh do portal ativo.
+        if (lote.get("filename") or "") == AVULSA_FILENAME:
+            continue
         bid = lote["id"]
         c = (sb.table(TABELA)
              .select("id", count="exact")

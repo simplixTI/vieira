@@ -89,6 +89,20 @@
       </header>
 
       <main class="container">
+        <div class="card avulsa-card">
+          <div class="avulsa-head">
+            <h2 class="avulsa-title">Consultar 1 CPF</h2>
+            <p class="muted avulsa-sub">Digite um CPF e clique em <strong>Consultar</strong>. O resultado aparece abaixo, no lote <em>Consultas avulsas</em>, e fica salvo para exportação.</p>
+          </div>
+          <form id="form-avulsa" autocomplete="off">
+            <div class="avulsa-row">
+              <input type="text" id="avulsa-cpf" placeholder="000.000.000-00" inputmode="numeric" maxlength="14" aria-label="CPF a consultar">
+              <button type="submit" class="btn btn-primary" id="btn-avulsa">Consultar</button>
+            </div>
+            <div id="avulsa-msg" class="msg avulsa-msg" role="status"></div>
+          </form>
+        </div>
+
         <div class="dashboard-head">
           <div class="field field-inline">
             <label for="batch-select">Lote</label>

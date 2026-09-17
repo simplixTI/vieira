@@ -7,6 +7,9 @@
   var PAGE_SIZE = 100;
   var EXPORT_CHUNK = 1000;
   var AUTO_REFRESH_MS = 20000;
+  var AVULSA_POLL_MS = 5000;             // polling rápido enquanto tem CPF avulso pendente
+  var AVULSA_FILENAME = '__avulsas__';   // marca do lote no banco (mesma no worker)
+  var AVULSA_LABEL = 'Consultas avulsas';
 
   // ---------- estado ----------
   var state = {
@@ -18,6 +21,8 @@
     page: 0,
     autoRefreshTimer: null,
     exporting: false,
+    avulsaBatchId: null,     // lote persistente 'Consultas avulsas' do usuário
+    avulsaWatch: null,       // { recordId, cpf, timer } enquanto aguarda resultado
   };
 
   // ---------- helpers de DOM ----------
@@ -41,6 +46,16 @@
     var d = new Date(iso);
     if (isNaN(d.getTime())) return '—';
     return d.toLocaleString('pt-BR');
+  }
+
+  function batchLabel(b) {
+    if (!b) return '';
+    if ((b.filename || '') === AVULSA_FILENAME) return AVULSA_LABEL;
+    return (b.filename || '(sem nome)') + ' — ' + formatDateTime(b.created_at);
+  }
+
+  function isAvulsaBatch(b) {
+    return !!(b && (b.filename || '') === AVULSA_FILENAME);
   }
 
   // ---------- validação de CPF ----------
@@ -90,6 +105,7 @@
     bindAuth();
     bindUpload();
     bindDashboard();
+    bindAvulsa();
 
     state.client.auth.getSession().then(function (res) {
       if (res.error) {
@@ -113,7 +129,9 @@
       state.session = null;
       state.batches = [];
       state.currentBatch = null;
+      state.avulsaBatchId = null;
       stopAutoRefresh();
+      stopAvulsaWatch();
       showView('login');
       setMsg($('#login-error'), 'Sua sessão expirou. Faça login novamente.');
       return true;
@@ -131,6 +149,8 @@
         loadBatches();
       } else {
         stopAutoRefresh();
+        stopAvulsaWatch();
+        state.avulsaBatchId = null;
         state.batches = [];
         state.currentBatch = null;
         showView('login');
@@ -165,6 +185,10 @@
     function doLogout() {
       state.client.auth.signOut().then(function () {
         stopAutoRefresh();
+        stopAvulsaWatch();
+        state.avulsaBatchId = null;
+        setAvulsaMsg('', '');
+        if ($('#avulsa-cpf')) $('#avulsa-cpf').value = '';
         resetUploadView();
         resetDashboardView();
       });
@@ -382,6 +406,164 @@
       });
   }
 
+  // ---------- CONSULTA AVULSA (1 CPF) ----------
+  function bindAvulsa() {
+    var input = $('#avulsa-cpf');
+    input.addEventListener('input', function (ev) {
+      var digits = normalizeCPF(ev.target.value).slice(0, 11);
+      var formatted = digits;
+      if (digits.length > 9) formatted = digits.replace(/(\d{3})(\d{3})(\d{3})(\d{0,2})/, '$1.$2.$3-$4');
+      else if (digits.length > 6) formatted = digits.replace(/(\d{3})(\d{3})(\d{0,3})/, '$1.$2.$3');
+      else if (digits.length > 3) formatted = digits.replace(/(\d{3})(\d{0,3})/, '$1.$2');
+      ev.target.value = formatted;
+    });
+    $('#form-avulsa').addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      submitAvulsa();
+    });
+  }
+
+  function setAvulsaMsg(text, cls) {
+    var el = $('#avulsa-msg');
+    el.className = 'msg avulsa-msg' + (cls ? ' ' + cls : '');
+    el.textContent = text || '';
+  }
+
+  function rememberAvulsaBatch() {
+    var found = (state.batches || []).find(isAvulsaBatch);
+    state.avulsaBatchId = found ? found.id : null;
+  }
+
+  function ensureAvulsaBatch() {
+    if (state.avulsaBatchId) return Promise.resolve(state.avulsaBatchId);
+    // procura no que já foi carregado
+    var existing = (state.batches || []).find(isAvulsaBatch);
+    if (existing) { state.avulsaBatchId = existing.id; return Promise.resolve(existing.id); }
+    // consulta o banco (pode ter sido criado em outra aba)
+    return state.client
+      .from('batches')
+      .select('id')
+      .eq('filename', AVULSA_FILENAME)
+      .eq('user_id', state.session.user.id)
+      .limit(1)
+      .then(function (res) {
+        if (res.error) throw res.error;
+        if (res.data && res.data.length) {
+          state.avulsaBatchId = res.data[0].id;
+          return state.avulsaBatchId;
+        }
+        // cria pela primeira vez
+        return state.client
+          .from('batches')
+          .insert({ filename: AVULSA_FILENAME, total: 0, status: 'processing', user_id: state.session.user.id })
+          .select('id')
+          .single()
+          .then(function (r) {
+            if (r.error) throw r.error;
+            state.avulsaBatchId = r.data.id;
+            return state.avulsaBatchId;
+          });
+      });
+  }
+
+  function submitAvulsa() {
+    var raw = $('#avulsa-cpf').value;
+    var cpf = normalizeCPF(raw);
+    if (cpf.length !== 11) {
+      setAvulsaMsg('CPF precisa ter 11 dígitos.', 'error');
+      return;
+    }
+    if (!validateCPF(cpf)) {
+      setAvulsaMsg('CPF inválido (dígitos verificadores não conferem).', 'error');
+      return;
+    }
+    var btn = $('#btn-avulsa');
+    btn.disabled = true;
+    setAvulsaMsg('⏳ Enviando CPF para a fila…', 'pending');
+
+    ensureAvulsaBatch()
+      .then(function (batchId) {
+        return state.client
+          .from('voter_records')
+          .insert({ batch_id: batchId, cpf: cpf })
+          .select('id')
+          .single();
+      })
+      .then(function (res) {
+        if (res.error) throw res.error;
+        var recordId = res.data.id;
+        setAvulsaMsg('⏳ Consultando CPF ' + formatCPF(cpf) + ' no TSE… O resultado aparece na tabela abaixo em segundos a alguns minutos.', 'pending');
+        $('#avulsa-cpf').value = '';
+        // recarrega lotes e já joga o cliente pro lote avulso
+        loadBatches(state.avulsaBatchId).then(function () {
+          startAvulsaWatch(recordId, cpf);
+        });
+      })
+      .catch(function (err) {
+        if (!handleAuthError(err)) {
+          setAvulsaMsg('Falha ao enviar consulta: ' + (err && err.message ? err.message : 'erro inesperado.'), 'error');
+        }
+      })
+      .finally(function () {
+        btn.disabled = false;
+      });
+  }
+
+  function startAvulsaWatch(recordId, cpf) {
+    stopAvulsaWatch();
+    var deadline = Date.now() + 20 * 60 * 1000; // desiste do polling ativo após 20 min (mas o worker segue processando)
+    var timer = setInterval(function () { checkAvulsa(); }, AVULSA_POLL_MS);
+    state.avulsaWatch = { recordId: recordId, cpf: cpf, timer: timer, deadline: deadline };
+    // primeira checagem em 2s (às vezes o worker responde rapidão)
+    setTimeout(checkAvulsa, 2000);
+  }
+
+  function stopAvulsaWatch() {
+    if (state.avulsaWatch && state.avulsaWatch.timer) {
+      clearInterval(state.avulsaWatch.timer);
+    }
+    state.avulsaWatch = null;
+  }
+
+  function checkAvulsa() {
+    var w = state.avulsaWatch;
+    if (!w) return;
+    if (Date.now() > w.deadline) {
+      setAvulsaMsg('⌛ A consulta ainda está na fila. Atualize esta página mais tarde para ver o resultado — ele fica salvo no lote "Consultas avulsas".', 'warn');
+      stopAvulsaWatch();
+      return;
+    }
+    state.client
+      .from('voter_records')
+      .select('id, cpf, status, attempts, elegibilidade, nome, zona_eleitoral, secao_eleitoral, municipio_votacao, checked_at')
+      .eq('id', w.recordId)
+      .single()
+      .then(function (res) {
+        if (res.error) return; // silencioso — tenta de novo
+        var r = res.data;
+        if (r.status === 'done') {
+          stopAvulsaWatch();
+          var label = elegLabel(r.elegibilidade);
+          var extras = [];
+          if (r.zona_eleitoral) extras.push('Zona ' + r.zona_eleitoral);
+          if (r.secao_eleitoral) extras.push('Seção ' + r.secao_eleitoral);
+          if (r.municipio_votacao) extras.push(r.municipio_votacao);
+          var extrasTxt = extras.length ? ' — ' + extras.join(' · ') : '';
+          setAvulsaMsg('✅ Resultado: ' + label + extrasTxt + '. Consulta salva na tabela abaixo.', 'ok');
+          // recarrega a página do lote para o cliente ver na tabela
+          if (state.currentBatch && state.currentBatch.id === state.avulsaBatchId) {
+            loadRecordsPage();
+            loadElegCards();
+            loadStatusCards();
+          }
+        } else if (r.status === 'error' && (r.attempts || 0) >= 5) {
+          stopAvulsaWatch();
+          setAvulsaMsg('❌ Não foi possível concluir a consulta agora. Tente novamente em alguns minutos.', 'error');
+        }
+        // demais status: sigo esperando
+      });
+  }
+
   // ---------- DASHBOARD ----------
   function bindDashboard() {
     $('#btn-new-upload').addEventListener('click', function () {
@@ -450,12 +632,13 @@
           return;
         }
         state.batches = res.data || [];
+        rememberAvulsaBatch();
         var sel = $('#batch-select');
         sel.textContent = '';
         state.batches.forEach(function (b) {
           var opt = document.createElement('option');
           opt.value = b.id;
-          opt.textContent = b.filename + ' — ' + formatDateTime(b.created_at);
+          opt.textContent = batchLabel(b);
           sel.appendChild(opt);
         });
         if (!state.batches.length) {
@@ -509,13 +692,14 @@
           return;
         }
         state.batches = res.data || [];
+        rememberAvulsaBatch();
         var sel = $('#batch-select');
         var prevValue = sel.value;
         sel.textContent = '';
         state.batches.forEach(function (b) {
           var opt = document.createElement('option');
           opt.value = b.id;
-          opt.textContent = b.filename + ' — ' + formatDateTime(b.created_at);
+          opt.textContent = batchLabel(b);
           sel.appendChild(opt);
         });
         var keep = state.batches.some(function (b) { return b.id === currentId; }) ? currentId : prevValue;
@@ -530,16 +714,20 @@
     var b = state.currentBatch;
     if (!b) return;
 
+    var avulsa = isAvulsaBatch(b);
     var badge = $('#batch-badge');
-    badge.textContent = statusLabel(b.status);
-    badge.className = 'badge badge-' + b.status;
+    if (avulsa) {
+      badge.textContent = 'Consultas avulsas';
+      badge.className = 'badge';
+    } else {
+      badge.textContent = statusLabel(b.status);
+      badge.className = 'badge badge-' + b.status;
+    }
 
     $('#batch-meta').textContent = '';
-    var meta = [
-      ['Arquivo', b.filename],
-      ['Total de CPFs', String(b.total)],
-      ['Enviado em', formatDateTime(b.created_at)],
-    ];
+    var meta = avulsa
+      ? [['Lote', 'Consultas avulsas'], ['Criado em', formatDateTime(b.created_at)]]
+      : [['Arquivo', b.filename], ['Total de CPFs', String(b.total)], ['Enviado em', formatDateTime(b.created_at)]];
     meta.forEach(function (pair) {
       var div = document.createElement('div');
       div.className = 'batch-meta-item';
@@ -553,6 +741,14 @@
       div.appendChild(v);
       $('#batch-meta').appendChild(div);
     });
+    // barra de progresso não faz sentido pra avulsas (sem total fixo)
+    if (avulsa) {
+      $('#batch-progress-fill').style.width = '0%';
+      $('#batch-progress-label').textContent = '';
+      $('#batch-progress-fill').parentElement.style.display = 'none';
+    } else {
+      $('#batch-progress-fill').parentElement.style.display = '';
+    }
     show($('#batch-info-card'));
   }
 
@@ -601,10 +797,12 @@
       });
       if (!total) wrap.appendChild(makeCard('Sem registros', 0, ''));
 
-        // barra de progresso
-        var progress = Math.min(1, (doneCount + errorCount) / (b.total || 1));
-        $('#batch-progress-fill').style.width = Math.round(progress * 100) + '%';
-        $('#batch-progress-label').textContent = doneCount + errorCount + ' de ' + b.total + ' verificados (' + Math.round(progress * 100) + '%)';
+        // barra de progresso — só faz sentido para lote com total fixo
+        if (!isAvulsaBatch(b)) {
+          var progress = Math.min(1, (doneCount + errorCount) / (b.total || 1));
+          $('#batch-progress-fill').style.width = Math.round(progress * 100) + '%';
+          $('#batch-progress-label').textContent = doneCount + errorCount + ' de ' + b.total + ' verificados (' + Math.round(progress * 100) + '%)';
+        }
       });
   }
 

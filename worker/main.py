@@ -53,6 +53,7 @@ import tse_client  # noqa: E402
 LOTE_A = 500          # registros por rodada na fase A
 LOTE_B = 200          # registros por rodada na fase B
 PAUSA_TSE = 2.5       # pacing entre consultas TSE (jitter até +1.5s → 2.5–4s)
+DAEMON_IDLE_SEG = int(os.environ.get("DAEMON_IDLE_SEG", "5") or "5")
 # MAX_TENTATIVAS vem de repo.py (mesmo valor que filtra as re-tentativas de
 # erro): stale/erro técnico repetido → status='error'; 'error' é terminal ao
 # atingir MAX — mas reentra na fila enquanto attempts < MAX (cooldown no repo).
@@ -391,7 +392,13 @@ def main() -> int:
     ap.add_argument("--stub", action="store_true",
                     help="usa TseStubClient (dry-run sem rede — consulta de "
                          "situação real já funciona sem este flag)")
+    ap.add_argument("--daemon", action="store_true",
+                    help="modo servico 24/7: em vez de sair quando a fila zerar, "
+                         "dorme DAEMON_IDLE_SEG (default 5s) e checa de novo. "
+                         "Ideal p/ systemd; latencia de avulsa ~=5s.")
     args = ap.parse_args()
+    if args.daemon:
+        args.producao = True  # daemon exige o loop de producao
 
     os.system("color")  # habilita ANSI no terminal do Windows
     log_path = _ativar_log()
@@ -422,24 +429,36 @@ def main() -> int:
         else:
             anterior = None
             rodada = 0
+            avisou_zerada = False  # em daemon, não spamar webhook a cada checagem
             while True:
                 rodada += 1
                 restantes = repo.contar_pendentes(sb)
                 print(f"\n══════ RODADA {rodada} — {restantes} registro(s) aberto(s) ══════")
-                if restantes == 0:
-                    print("🎉 Fila ZERADA.")
-                    notificar("🎉 TSE worker: fila zerada — nada mais a processar.")
-                    break
                 if _parar_pedido():
                     print("🛑 Arquivo STOP detectado — encerrando.")
                     break
+                if restantes == 0:
+                    if not avisou_zerada:
+                        print("🎉 Fila ZERADA.")
+                        notificar("🎉 TSE worker: fila zerada — nada mais a processar.")
+                        avisou_zerada = True
+                    if args.daemon:
+                        time.sleep(DAEMON_IDLE_SEG)
+                        anterior = None
+                        continue
+                    break
                 if anterior is not None and restantes >= anterior:
                     print(f"⚠️  Sem progresso ({restantes} abertos, igual à rodada "
-                          f"anterior). Possíveis registros travados — parando.")
+                          f"anterior).")
+                    if args.daemon:
+                        time.sleep(DAEMON_IDLE_SEG)
+                        anterior = None
+                        continue
                     notificar(f"⚠️ TSE worker: parado sem progresso "
                               f"({restantes} registros abertos).")
                     break
                 anterior = restantes
+                avisou_zerada = False
                 feito = _rodada(args.fase, lote_a, lote_b, sb,
                                 processados_b_total, args.limite)
                 processados_b_total += feito["b"]
@@ -450,6 +469,10 @@ def main() -> int:
                 if feito.get("interrompido"):
                     break
                 if feito["a"] == 0 and feito["b"] == 0:
+                    if args.daemon:
+                        time.sleep(DAEMON_IDLE_SEG)
+                        anterior = None
+                        continue
                     print("⚠️  Rodada sem trabalho — encerrando.")
                     break
 

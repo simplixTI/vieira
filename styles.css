@@ -415,6 +415,51 @@ tbody tr:hover { background: #f0f5fb; }
   .stats { flex-direction: column; }
 }
 
+/* ---------- Consulta avulsa (1 CPF) ---------- */
+.avulsa-card {
+  border-left: 4px solid var(--accent);
+}
+.avulsa-head { margin-bottom: 12px; }
+.avulsa-title {
+  margin: 0 0 4px;
+  font-size: 17px;
+  color: var(--accent);
+}
+.avulsa-sub { margin: 0; font-size: 13.5px; }
+.avulsa-row {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.avulsa-row input {
+  flex: 1;
+  min-width: 220px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 15px;
+  font-family: inherit;
+  background: #fff;
+  color: var(--text);
+}
+.avulsa-row input:focus {
+  outline: 2px solid var(--accent-light);
+  outline-offset: -1px;
+  border-color: var(--accent-light);
+}
+.avulsa-msg { margin: 10px 0 0; font-size: 13.5px; }
+.avulsa-msg.ok { color: var(--ok); }
+.avulsa-msg.warn { color: var(--warn); }
+.avulsa-msg.error { color: var(--bad); }
+.avulsa-msg.pending { color: var(--accent); }
+
+@media (max-width: 720px) {
+  .avulsa-row { flex-direction: column; }
+  .avulsa-row input { min-width: 0; width: 100%; }
+  .avulsa-row .btn { width: 100%; }
+}
+
 /* ---------- Legenda de resultados ---------- */
 .legend-title {
   margin: 0 0 12px;

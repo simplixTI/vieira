@@ -1,7 +1,11 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Registros sem zona/seção <span class="muted">({{ regs|length }})</span></h1>
-<p class="muted">Registros com <code>status=done</code> mas <strong>sem zona eleitoral</strong> (só bateu situação, não o "onde vota"). Você pode preencher os campos manualmente aqui e o cliente vê imediatamente no portal dele.</p>
+<p class="muted">Registros com <code>status=done</code> mas <strong>sem zona eleitoral</strong> — o TSE retornou 403 "Acesso negado" no endpoint <code>onde-votar</code> na primeira tentativa. Duas ações:</p>
+<ul class="muted" style="margin: 0 0 16px 20px; font-size: 13px;">
+  <li><strong>Reprocessar TSE</strong>: volta pra fila, o worker tenta de novo em ~5s. Às vezes o 403 é temporário (rate limit) e passa numa retentativa. <em>Consome 1 consulta da cota do cliente.</em></li>
+  <li><strong>Editar</strong>: preenche os campos manualmente (aparece imediatamente no portal do cliente). Zero custo.</li>
+</ul>
 
 {% if regs %}
 <table>
@@ -23,7 +27,12 @@
       <td><span class="badge badge-{% if r.elegibilidade == 'apto' %}done{% elif r.elegibilidade in ['inapto_cancelado','inapto_suspenso','inapto_transferido'] %}error{% else %}processing{% endif %}">{{ r.elegibilidade or '—' }}</span></td>
       <td class="muted">{{ r.motivo_situacao or '—' }}</td>
       <td>{{ r.checked_at | dt }}</td>
-      <td><a class="btn" href="/records/{{ r.id }}/edit?back=/incomplete">✎ Editar</a></td>
+      <td>
+        <form class="inline" method="post" action="/records/{{ r.id }}/retry">
+          <button class="btn btn-warn" type="submit" title="Volta pro TSE (custa 1 consulta da cota)">↻ Reprocessar TSE</button>
+        </form>
+        <a class="btn" href="/records/{{ r.id }}/edit?back=/incomplete">✎ Editar</a>
+      </td>
     </tr>
   {% endfor %}
   </tbody>

@@ -930,16 +930,30 @@
       if (r.elegibilidade) tdEleg.className = 'eleg eleg-' + r.elegibilidade;
       tr.appendChild(tdEleg);
 
+      // "TSE não retornou": aptidão foi obtida mas o TSE bloqueou o endpoint
+      // 'onde-votar' (403 do próprio TSE — não é falha nossa). Só marca se
+      // elegibilidade é apto/inapto_* (regularizar_tse é vazio naturalmente).
+      var elegAptidaoOK = r.elegibilidade && r.elegibilidade.indexOf('regularizar') !== 0;
+      var tseNaoRetornou = elegAptidaoOK && !r.zona_eleitoral;
+
       var tdZona = document.createElement('td');
-      tdZona.textContent = r.zona_eleitoral || '—';
+      if (tseNaoRetornou) {
+        tdZona.textContent = 'TSE não retornou';
+        tdZona.className = 'tse-nao-retornou';
+        tdZona.title = 'A base pública do TSE não liberou o local de votação para este CPF.';
+      } else {
+        tdZona.textContent = r.zona_eleitoral || '—';
+      }
       tr.appendChild(tdZona);
 
       var tdSecao = document.createElement('td');
-      tdSecao.textContent = r.secao_eleitoral || '—';
+      tdSecao.textContent = tseNaoRetornou ? '—' : (r.secao_eleitoral || '—');
+      if (tseNaoRetornou) tdSecao.className = 'tse-nao-retornou';
       tr.appendChild(tdSecao);
 
       var tdMun = document.createElement('td');
-      tdMun.textContent = r.municipio_votacao || '—';
+      tdMun.textContent = tseNaoRetornou ? '—' : (r.municipio_votacao || '—');
+      if (tseNaoRetornou) tdMun.className = 'tse-nao-retornou';
       tr.appendChild(tdMun);
 
       var tdChecked = document.createElement('td');

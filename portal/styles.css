@@ -386,6 +386,11 @@ tbody tr:hover { background: #f0f5fb; }
   padding: 28px 12px;
 }
 
+.tse-nao-retornou {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 12.5px;
+}
 .eleg { font-weight: 600; }
 .eleg-apto { color: var(--ok); }
 .eleg-inapto_cancelado, .eleg-inapto_suspenso { color: var(--bad); }

@@ -439,7 +439,7 @@ tbody tr:hover { background: #f0f5fb; }
 }
 .avulsa-row input {
   flex: 1;
-  min-width: 220px;
+  min-width: 180px;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -448,6 +448,8 @@ tbody tr:hover { background: #f0f5fb; }
   background: #fff;
   color: var(--text);
 }
+.avulsa-row #avulsa-cel { flex: 0 1 200px; }
+td.cel { font-family: "SF Mono", Consolas, monospace; font-size: 13px; }
 .avulsa-row input:focus {
   outline: 2px solid var(--accent-light);
   outline-offset: -1px;

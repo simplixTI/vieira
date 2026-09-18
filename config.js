@@ -4,6 +4,10 @@
   var cfg = {
     SUPABASE_URL: 'https://wipthjinvcyglbeuxxsb.supabase.co',
     SUPABASE_ANON_KEY: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndpcHRoamludmN5Z2xiZXV4eHNiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk1MjUxMzAsImV4cCI6MjEwNTEwMTEzMH0.s-IShdUxLV0o4tIpLutnpo9sMDivmQu34n1oqwmm0pA',
+    // Features por tenant. Override no portal específico do cliente.
+    FEATURES: {
+      celular: false,   // Leo Vieira Filho seta true no config.js dele
+    },
   };
 
   try {

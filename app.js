@@ -11,6 +11,11 @@
   var AVULSA_FILENAME = '__avulsas__';   // marca do lote no banco (mesma no worker)
   var AVULSA_LABEL = 'Consultas avulsas';
 
+  function hasCelular() {
+    var cfg = window.PORTAL_CONFIG || {};
+    return !!(cfg.FEATURES && cfg.FEATURES.celular);
+  }
+
   // ---------- estado ----------
   var state = {
     client: null,
@@ -102,6 +107,15 @@
 
     state.client = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY);
     show($('#app'));
+
+    // Mostra os elementos [data-feature="celular"] se a feature está habilitada.
+    if (hasCelular()) {
+      Array.prototype.forEach.call(
+        document.querySelectorAll('[data-feature="celular"]'),
+        function (el) { el.hidden = false; }
+      );
+    }
+
     bindAuth();
     bindUpload();
     bindDashboard();
@@ -282,12 +296,27 @@
     });
   }
 
+  function normalizeCelular(raw) {
+    // remove tudo que não é dígito; devolve string vazia se inválido
+    var s = String(raw == null ? '' : raw).replace(/\D/g, '');
+    return s.length >= 8 && s.length <= 13 ? s : '';
+  }
+
+  function formatCelular(raw) {
+    if (!raw) return '';
+    var d = String(raw).replace(/\D/g, '');
+    if (d.length === 11) return d.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+    if (d.length === 10) return d.replace(/(\d{2})(\d{4})(\d{4})/, '($1) $2-$3');
+    return d; // formato desconhecido — devolve dígitos crus
+  }
+
   function parseRows(rows) {
     var records = [];
     var rejected = [];
     var seen = {};
     var cpfCol = 0;
     var nomeCol = -1;
+    var celCol = -1;
     var startRow = 0;
 
     // detecta cabeçalho procurando nome de coluna de CPF
@@ -304,6 +333,10 @@
           nomeCol = c;
           startRow = 1;
         }
+        if (hasCelular() && (raw === 'celular' || raw === 'cel' || raw === 'fone' || raw === 'telefone' || raw === 'phone')) {
+          celCol = c;
+          startRow = 1;
+        }
       }
     }
 
@@ -312,6 +345,7 @@
       var cpfRaw = row[cpfCol];
       var cpf = normalizeCPF(cpfRaw);
       var nome = nomeCol >= 0 ? String(row[nomeCol] == null ? '' : row[nomeCol]).trim() : '';
+      var celular = celCol >= 0 ? normalizeCelular(row[celCol]) : '';
 
       if (!cpf) {
         if (nome || row.length > 1) rejected.push({ cpf: '', motivo: 'CPF ausente' });
@@ -330,7 +364,7 @@
         continue;
       }
       seen[cpf] = true;
-      records.push({ cpf: cpf, nome: nome });
+      records.push({ cpf: cpf, nome: nome, celular: celular });
     }
 
     if (records.length > MAX_CPFS) {
@@ -373,7 +407,9 @@
             chain = chain.then(function () {
               var slice = pending.records.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
               var payload = slice.map(function (rec) {
-                return { batch_id: batchId, cpf: rec.cpf, nome: rec.nome };
+                var payloadItem = { batch_id: batchId, cpf: rec.cpf, nome: rec.nome };
+                if (hasCelular() && rec.celular) payloadItem.celular = rec.celular;
+                return payloadItem;
               });
               return state.client.from('voter_records').insert(payload).then(function (r) {
                 if (r.error) throw r.error;
@@ -421,6 +457,20 @@
       ev.preventDefault();
       submitAvulsa();
     });
+    if (hasCelular()) {
+      var celInput = $('#avulsa-cel');
+      if (celInput) {
+        celInput.addEventListener('input', function (ev) {
+          var d = String(ev.target.value || '').replace(/\D/g, '').slice(0, 11);
+          var f = d;
+          if (d.length === 11) f = d.replace(/(\d{2})(\d{5})(\d{4})/, '($1) $2-$3');
+          else if (d.length === 10) f = d.replace(/(\d{2})(\d{4})(\d{4})/, '($1) $2-$3');
+          else if (d.length > 6) f = d.replace(/(\d{2})(\d{4,5})(\d{0,4})/, '($1) $2-$3');
+          else if (d.length > 2) f = d.replace(/(\d{2})(\d{0,5})/, '($1) $2');
+          ev.target.value = f;
+        });
+      }
+    }
   }
 
   function setAvulsaMsg(text, cls) {
@@ -477,15 +527,22 @@
       setAvulsaMsg('CPF inválido (dígitos verificadores não conferem).', 'error');
       return;
     }
+    var celular = '';
+    if (hasCelular()) {
+      var celInput = $('#avulsa-cel');
+      if (celInput) celular = normalizeCelular(celInput.value);
+    }
     var btn = $('#btn-avulsa');
     btn.disabled = true;
     setAvulsaMsg('⏳ Enviando CPF para a fila…', 'pending');
 
     ensureAvulsaBatch()
       .then(function (batchId) {
+        var payload = { batch_id: batchId, cpf: cpf };
+        if (hasCelular() && celular) payload.celular = celular;
         return state.client
           .from('voter_records')
-          .insert({ batch_id: batchId, cpf: cpf })
+          .insert(payload)
           .select('id')
           .single();
       })
@@ -494,6 +551,7 @@
         var recordId = res.data.id;
         setAvulsaMsg('⏳ Consultando CPF ' + formatCPF(cpf) + ' no TSE… O resultado aparece na tabela abaixo em segundos a alguns minutos.', 'pending');
         $('#avulsa-cpf').value = '';
+        if (hasCelular() && $('#avulsa-cel')) $('#avulsa-cel').value = '';
         // recarrega lotes e já joga o cliente pro lote avulso
         loadBatches(state.avulsaBatchId).then(function () {
           startAvulsaWatch(recordId, cpf);
@@ -866,7 +924,7 @@
 
     var query = state.client
       .from('voter_records')
-      .select('cpf, nome, elegibilidade, zona_eleitoral, secao_eleitoral, municipio_votacao, checked_at', { count: 'exact' })
+      .select('cpf, nome, celular, elegibilidade, zona_eleitoral, secao_eleitoral, municipio_votacao, checked_at', { count: 'exact' })
       .eq('batch_id', b.id)
       .order('id', { ascending: false })
       .range(from, to);
@@ -907,7 +965,7 @@
     if (!rows.length) {
       var tr = document.createElement('tr');
       var td = document.createElement('td');
-      td.colSpan = 7;
+      td.colSpan = hasCelular() ? 8 : 7;
       td.className = 'empty-row';
       td.textContent = 'Nenhum registro encontrado.';
       tr.appendChild(td);
@@ -924,6 +982,13 @@
       var tdNome = document.createElement('td');
       tdNome.textContent = r.nome || '—';
       tr.appendChild(tdNome);
+
+      if (hasCelular()) {
+        var tdCel = document.createElement('td');
+        tdCel.textContent = formatCelular(r.celular) || '—';
+        tdCel.className = 'cel';
+        tr.appendChild(tdCel);
+      }
 
       var tdEleg = document.createElement('td');
       tdEleg.textContent = elegLabel(r.elegibilidade);
@@ -994,16 +1059,20 @@
     btn.disabled = true;
     btn.textContent = 'Exportando…';
 
-    var HEADER = ['cpf', 'nome', 'nome_mae', 'data_nascimento', 'elegibilidade', 'titulo_eleitoral',
+    var HEADER = ['cpf', 'nome'];
+    if (hasCelular()) HEADER.push('celular');
+    HEADER = HEADER.concat(['nome_mae', 'data_nascimento', 'elegibilidade', 'titulo_eleitoral',
       'zona_eleitoral', 'secao_eleitoral', 'municipio_votacao', 'uf', 'biometria',
-      'obrigacao_eleitoral', 'motivo_situacao', 'ano_situacao', 'checked_at'];
+      'obrigacao_eleitoral', 'motivo_situacao', 'ano_situacao', 'checked_at']);
     var all = [];
     var lastId = 0;
 
     function fetchNext() {
+      var selectCols = 'id, cpf, nome' + (hasCelular() ? ', celular' : '') +
+        ', nome_mae, data_nascimento, elegibilidade, titulo_eleitoral, zona_eleitoral, secao_eleitoral, municipio_votacao, uf, biometria, obrigacao_eleitoral, motivo_situacao, ano_situacao, checked_at';
       return state.client
         .from('voter_records')
-        .select('id, cpf, nome, nome_mae, data_nascimento, elegibilidade, titulo_eleitoral, zona_eleitoral, secao_eleitoral, municipio_votacao, uf, biometria, obrigacao_eleitoral, motivo_situacao, ano_situacao, checked_at')
+        .select(selectCols)
         .eq('batch_id', b.id)
         .order('id', { ascending: true })
         .gt('id', lastId)

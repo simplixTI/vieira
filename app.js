@@ -4,7 +4,7 @@
 
   var MAX_CPFS = 40000;
   var CHUNK_SIZE = 500;
-  var PAGE_SIZE = 100;
+  var PAGE_SIZE = 250;
   var EXPORT_CHUNK = 1000;
   var AUTO_REFRESH_MS = 20000;
   var AVULSA_POLL_MS = 5000;             // polling rápido enquanto tem CPF avulso pendente
@@ -868,7 +868,7 @@
       .from('voter_records')
       .select('cpf, nome, elegibilidade, zona_eleitoral, secao_eleitoral, municipio_votacao, checked_at', { count: 'exact' })
       .eq('batch_id', b.id)
-      .order('id', { ascending: true })
+      .order('id', { ascending: false })
       .range(from, to);
 
     var eleg = $('#filter-elegibilidade').value;

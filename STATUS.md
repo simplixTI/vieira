@@ -2,7 +2,7 @@
 
 > **Pro contexto de IA/agente:** este arquivo é o ponto de partida pra retomar o projeto.
 > Leia ele inteiro, depois `.env.portal` (chaves, NUNCA imprima valores) e os arquivos-chave listados abaixo.
-> Última atualização: 2026-09-16 (piloto concluído, aguardando primeiro lote real do cliente).
+> Última atualização: 2026-09-17 (portal com consulta avulsa de 1 CPF + worker migrado pra VPS Hostinger 24/7 como systemd + cliente Priscila em trial de 100 consultas).
 
 ---
 
@@ -21,10 +21,12 @@ nascimento via APIs pagas) → consulta TSE → grava resultado → dashboard at
 | Item | Valor |
 |---|---|
 | Portal (produção) | https://simplixti.github.io/vieira/ |
-| Login do cliente | `anderson@vieira.com.br` / `Vieira@2026` |
+| Login do cliente | `priscila@vieira.com.br` / `Vieira@2026` (renomeado de anderson em 17/09 via GoTrue admin; **user_id preservado** `e4685c8b...`) |
 | Projeto Supabase | `TSE_VIEIRA` — ref `wipthjinvcyglbeuxxsb` (Canadá Central) |
 | Repositório GitHub | https://github.com/simplixTI/vieira (branch `main` = código; `gh-pages` = portal publicado) |
-| Chaves do Supabase (anon/service/senha do banco) | arquivo `.env.portal` na raiz deste projeto |
+| **VPS worker (produção)** | Hostinger — `root@179.198.117.127` — Ubuntu 24.04, Python 3.12; SSH via chave `~/.ssh/vps-db-179` (senha do root guardada com o Bruno) |
+| Path do worker na VPS | `/opt/vieira-tse/` (git clone, venv em `.venv/`, .env.portal e export_vps/.env copiados por scp) |
+| Chaves do Supabase (anon/service/senha do banco) | arquivo `.env.portal` na raiz deste projeto (e cópia em `/opt/vieira-tse/.env.portal` da VPS) |
 | Chaves das APIs de enriquecimento (API B / Hashiro) | `export_vps/.env` (`API_B_KEY`, `HASHIRO_TOKEN`) |
 | Webhook de alertas do worker (opcional) | `NOTIFY_WEBHOOK_URL` em `export_vps/.env` |
 
@@ -94,17 +96,47 @@ Headers fixos em TODAS as chamadas: `api-authorization: c6f7e0616edfef74aee7cde0
   **Para liberar após nova cobrança:** subir o env ou apagar a linha do cliente em `avisos_limite` pro mês.
 - **Custo de enriquecimento:** 1 chamada API B por CPF (Hashiro só se API B falhar). Worker loga o total.
 - Contagem de cota = registros `done` no período + `error` retentados no período.
+- **Modo `--daemon`** (usado no systemd da VPS): em vez de sair quando a fila zera, dorme
+  `DAEMON_IDLE_SEG` (default 5s) e re-checa. Latência de consulta avulsa ≈ 5s.
+- **Consultas avulsas (1 CPF)**: lote com `filename='__avulsas__'` (1 por usuário). O worker
+  **prioriza** essas em ambas as fases (`pegar_pendentes_enriquecimento` /
+  `pegar_prontos_tse` buscam avulsas primeiro) e **nunca fecha** o lote em
+  `atualizar_batches` (fica `processing` pra sempre; o portal segue com auto-refresh).
 
 ## 6. Como operar
 
-**Rodar o worker (janela manual):**
+**Produção (VPS Hostinger, systemd 24/7):** o worker roda como serviço `vieira-tse-worker`
+em `root@179.198.117.127`, em modo `--daemon` (loop com sleep 5s quando fila zera). Auto-restart
+via systemd, memória limitada a 512 MB, CPU até 80%. Task Scheduler do Windows local está
+**desabilitado** (não usar mais — era do sistema antigo AHK).
+
+```bash
+# ── monitorar ──
+ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 "systemctl status vieira-tse-worker"
+ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 "tail -f /opt/vieira-tse/worker/logs/worker_\$(date +%Y%m%d).log"
+
+# ── reiniciar (mudou env ou apenas travou) ──
+ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 "systemctl restart vieira-tse-worker"
+
+# ── deploy de código novo (depois de push no git main) ──
+ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 \
+  "cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker"
+```
+
+**Env vars do serviço** (drop-in em `/etc/systemd/system/vieira-tse-worker.service.d/limits.conf`):
+- `LIMITE_MENSAL_POR_CLIENTE=100` — **trial da Priscila** (default de produção é 50000).
+- `LIMITE_DIARIO_POR_CLIENTE=100` — trial da Priscila (default 6000).
+- Pra liberar após Priscila pagar: `sed -i 's/=100/=50000/;...' limits.conf`, `daemon-reload`, `restart`
+  (comando completo no card final da sessão de 17/09).
+
+**Janela manual (só pra debug local, opcional):**
 ```
 cd worker
 ..\export_vps\.venv_new\Scripts\python.exe main.py --producao --limite N
 ```
 (`--fase a|b|ambas`, `--stub` p/ teste sem rede; arquivo `worker/STOP` para entre registros;
-logs em `worker/logs/`.) O venv que funciona é `export_vps/.venv_new` (o `.venv` antigo tá quebrado).
-**Produção contínua:** agendar `run_worker.bat` a cada 15 min via Task Scheduler (padrão CRMLite).
+logs em `worker/logs/`.) O venv local que funciona é `export_vps/.venv_new`. **Não usar a
+máquina local pra produção — a VPS já cobre isso.**
 
 **Aplicar migrations no banco:**
 ```
@@ -122,11 +154,21 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
 
 - **Fases 0–3 concluídas:** descoberta do endpoint, schema, worker, portal, deploy, Git.
 - **Piloto de 100 CPFs aleatórios:** completo, rodada final com **0 erros** em 86 registros.
-  ~15% dos CPFs aleatórios bateram com pessoas reais (conferido: estatística bate). Bugs de
-  upload do portal e 3 do worker encontrados e corrigidos (histórico no git).
+- **17/09 — Feature nova: consulta avulsa de 1 CPF** ([commit b5bb5f0](https://github.com/simplixTI/vieira/commit/b5bb5f0)).
+  Card "Consultar 1 CPF" no topo do dashboard; cria lote persistente `__avulsas__` por usuário
+  e insere 1 CPF `pending`. Worker prioriza avulsas nas duas fases; portal faz polling a cada
+  5s e mostra o resultado (aptidão, zona, seção, município). Reusa a mesma tabela + botão de
+  exportar CSV.
+- **17/09 — Worker migrado pra VPS Hostinger 24/7** ([commit 93f5cf9](https://github.com/simplixTI/vieira/commit/93f5cf9)):
+  novo modo `--daemon` + serviço systemd `vieira-tse-worker` rodando em `/opt/vieira-tse/`.
+  Task Scheduler do Windows local desabilitado.
+- **17/09 — Priscila em trial:** anderson@ renomeado pra `priscila@vieira.com.br` (mesmo
+  user_id); histórico de teste (2 avulsas) apagado; limite de 100 consultas/mês configurado
+  via env vars do systemd (`LIMITE_MENSAL_POR_CLIENTE=100` + `LIMITE_DIARIO_POR_CLIENTE=100`).
+  Ao estourar, o worker pausa a fila dela e o webhook alerta o ADM.
 - **Banco ZERADO** (lotes de teste apagados; estrutura intacta; migrations 001–003 aplicadas).
-- **Legenda "Entenda os resultados"** no rodapé do dashboard (apto/inapto/regularizar/erro).
-- **PENDENTE:** primeiro upload real do cliente (planilha de CPFs verdadeiros).
+- **PENDENTE 18/09+:** Priscila usar as 100 do trial e (a) pagar → subir limite pra 50000 (comando
+  no §6); ou (b) não pagar → banir o usuário via painel Supabase Auth (`Users → priscila → Ban`).
 - Elegibilidade: `apto` / `inapto_cancelado` / `inapto_suspenso` / `inapto_transferido` /
   `regularizar_tse` (CPF sem título). Mapa em `worker/repo.py:mapear_elegibilidade`.
 
@@ -139,3 +181,12 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
 - Supabase CLI da máquina loga numa conta que NÃO tem acesso a este projeto — não usar CLI
   pra este projeto; usar `.env.portal` + `aplica_schema.py`.
 - Ao alterar `portal/`, lembrar: commit → push main → `git subtree push --prefix portal origin gh-pages`.
+- Ao alterar `worker/` ou `export_vps/`, lembrar: push main → SSH na VPS →
+  `cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker`.
+- **Chave SSH** da VPS: `~/.ssh/vps-db-179` (ED25519, autorizada em `authorized_keys` do root).
+  Se cair de novo (Hostinger reinstala VPS ou senha muda), pedir pro Bruno rodar
+  `type $HOME\.ssh\vps-db-179.pub | ssh root@179.198.117.127 "cat >> ~/.ssh/authorized_keys"`
+  digitando a senha nova do root uma vez.
+- **Deploy da VPS ficou lembrado no comando** — não usar Docker aqui (a VPS tem docker rodando
+  outros projetos: agente-sap/maturix/pontotel/postgres, mas o worker é 1 serviço systemd puro,
+  1 venv, ~40 MB de RAM — mais simples que container).

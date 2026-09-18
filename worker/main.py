@@ -183,29 +183,46 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
     # e continuam sozinhos (amanhã p/ o diário; após liberação p/ o mensal).
     # Só consulta que efetivamente rodou conta (sucesso, stale ou erro).
     # O check DIÁRIO roda antes do MENSAL — qualquer um dos dois barra.
-    limite_diario = int(getattr(repo, "LIMITE_DIARIO_POR_CLIENTE", 0) or 0)
-    limite_mensal = int(getattr(repo, "LIMITE_MENSAL_POR_CLIENTE", 0) or 0)
+    limite_diario_default = int(getattr(repo, "LIMITE_DIARIO_POR_CLIENTE", 0) or 0)
+    limite_mensal_default = int(getattr(repo, "LIMITE_MENSAL_POR_CLIENTE", 0) or 0)
+    overrides = repo.mapa_limites_por_cliente(sb)  # user_id → {'mensal':N,'diario':N}
+
+    def lim_diario_de(dono):
+        v = overrides.get(dono, {}).get("diario")
+        return int(v) if v else limite_diario_default
+
+    def lim_mensal_de(dono):
+        v = overrides.get(dono, {}).get("mensal")
+        return int(v) if v else limite_mensal_default
+
+    # Se pelo menos um limite (default ou override) é > 0, precisa mapear donos.
+    tem_algum_limite = (limite_diario_default > 0 or limite_mensal_default > 0
+                        or any((o.get("diario") or 0) > 0 or (o.get("mensal") or 0) > 0
+                               for o in overrides.values()))
+
     mapa_donos: dict = {}
     usados_hoje: dict = {}
     usados_mes: dict = {}
     avisados_limite: set = set()    # donos já avisados de teto DIÁRIO (por lote)
     avisados_mensal: set = set()    # donos já avisados de teto MENSAL (por lote)
-    if limite_diario > 0 or limite_mensal > 0:
+    if tem_algum_limite:
         mapa_donos = repo.mapa_lotes_donos(sb)
-        if limite_diario > 0:
-            usados_hoje = repo.consultas_hoje_por_cliente(sb, mapa=mapa_donos)
-        if limite_mensal > 0:
-            usados_mes = repo.consultas_mes_por_cliente(sb, mapa=mapa_donos)
+        usados_hoje = repo.consultas_hoje_por_cliente(sb, mapa=mapa_donos)
+        usados_mes = repo.consultas_mes_por_cliente(sb, mapa=mapa_donos)
+        # log resumido do consumo — mostra o teto EFETIVO (override se existir, senão default)
+        def _fmt(usados_map, kind):
+            partes_u = []
+            for u, n in sorted(usados_map.items(), key=lambda kv: str(kv[0])):
+                teto = lim_diario_de(u) if kind == "diario" else lim_mensal_de(u)
+                partes_u.append(f"{str(u)[:8]}={n}/{teto}")
+            return ", ".join(partes_u)
         partes = []
-        if limite_diario > 0:
-            partes.append("hoje: " + ", ".join(f"{str(u)[:8]}={n}" for u, n in
-                            sorted(usados_hoje.items(), key=lambda kv: str(kv[0])))
-                          + f" (teto {limite_diario})")
-        if limite_mensal > 0:
-            partes.append("mês: " + ", ".join(f"{str(u)[:8]}={n}" for u, n in
-                            sorted(usados_mes.items(), key=lambda kv: str(kv[0])))
-                          + f" (teto {limite_mensal})")
-        print("  📊 fase B — consumo " + " | ".join(partes))
+        if usados_hoje:
+            partes.append("hoje: " + _fmt(usados_hoje, "diario"))
+        if usados_mes:
+            partes.append("mês: " + _fmt(usados_mes, "mensal"))
+        if partes:
+            print("  📊 fase B — consumo " + " | ".join(partes))
 
     cliente_tse = tse_client.cliente()
     paca = cliente_tse.pacing_interno  # HTTP real já faz pacing interno
@@ -230,33 +247,36 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
         # ── Tetos por dono do lote: além do limite, NÃO toca o registro ──
         # DIÁRIO primeiro; MENSAL depois (qualquer um barra). Skip mensal
         # dispara aviso único ao admin (tabela avisos_limite garante 1x/mês).
-        if limite_diario > 0 or limite_mensal > 0:
+        # Cada dono pode ter override em limites_por_cliente; senão cai no default global.
+        if tem_algum_limite:
             dono = mapa_donos.get(reg.get("batch_id"))
             if dono is not None:
-                if limite_diario > 0 and usados_hoje.get(dono, 0) >= limite_diario:
+                lim_d = lim_diario_de(dono)
+                lim_m = lim_mensal_de(dono)
+                if lim_d > 0 and usados_hoje.get(dono, 0) >= lim_d:
                     stats["aguardando_limite"] += 1
                     stats["aguardando_diario"] += 1
                     if dono not in avisados_limite:
                         avisados_limite.add(dono)
                         print(f"  ⏸️  cliente {str(dono)[:8]} atingiu o limite diário "
-                              f"({limite_diario}) — registros aguardam amanhã.")
+                              f"({lim_d}) — registros aguardam amanhã.")
                     continue
-                if limite_mensal > 0 and usados_mes.get(dono, 0) >= limite_mensal:
+                if lim_m > 0 and usados_mes.get(dono, 0) >= lim_m:
                     stats["aguardando_limite"] += 1
                     stats["aguardando_mensal"] += 1
                     if dono not in avisados_mensal:
                         avisados_mensal.add(dono)
                         print(f"  🚧 cliente {str(dono)[:8]} atingiu o LIMITE MENSAL "
-                              f"({limite_mensal}) — aguardando liberação comercial (ADM).")
+                              f"({lim_m}) — aguardando liberação comercial (ADM).")
                     try:
-                        if repo.avisar_limite_mensal(dono, limite_mensal, sb=sb):
+                        if repo.avisar_limite_mensal(dono, lim_m, sb=sb):
                             try:
                                 email = _email_do_cliente(dono)
                             except Exception:
                                 email = dono  # resolução falhou → avisa com user_id mesmo
                             try:
                                 notificar(f"🚨 LIMITE MENSAL ATINGIDO — cliente {email} "
-                                          f"({dono}) consumiu {limite_mensal} consultas em "
+                                          f"({dono}) consumiu {lim_m} consultas em "
                                           f"{datetime.now():%m/%Y}. CPFs aguardando nova "
                                           f"cobrança; processamento pausado para este "
                                           f"cliente até liberação.")
@@ -281,7 +301,7 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
         stats["processados"] += 1  # conta TODA tentativa (sucesso, stale ou erro)
         if reg.get("_retry"):
             stats["retries"] += 1
-        if limite_diario > 0 or limite_mensal > 0:
+        if tem_algum_limite:
             dono = mapa_donos.get(reg.get("batch_id"))
             if dono is not None:
                 usados_hoje[dono] = usados_hoje.get(dono, 0) + 1   # consulta consumida

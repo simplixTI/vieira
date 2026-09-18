@@ -244,6 +244,32 @@ def _consultas_desde(sb, inicio_iso: str, mapa: dict) -> dict:
     return contagem
 
 
+TABELA_LIMITES = "limites_por_cliente"
+
+
+def mapa_limites_por_cliente(sb: "Client | None" = None) -> dict:
+    """user_id → {'mensal': N|None, 'diario': N|None} (override dos defaults globais).
+
+    Cliente sem linha na tabela usa o default global (`LIMITE_MENSAL_POR_CLIENTE`
+    e `LIMITE_DIARIO_POR_CLIENTE`). Valor `None`/`0` na coluna também cai no default.
+    """
+    sb = sb or cliente()
+    try:
+        r = (sb.table(TABELA_LIMITES)
+             .select("user_id,limite_mensal,limite_diario")
+             .execute()).data or []
+    except Exception:
+        # tabela ainda não existe → nenhum override (funciona igual a antes)
+        return {}
+    out: dict = {}
+    for row in r:
+        out[row["user_id"]] = {
+            "mensal": row.get("limite_mensal") or None,
+            "diario": row.get("limite_diario") or None,
+        }
+    return out
+
+
 def consultas_hoje_por_cliente(sb: "Client | None" = None,
                                mapa: "dict | None" = None) -> dict:
     """Consultas TSE consumidas HOJE (meia-noite local) por cliente."""

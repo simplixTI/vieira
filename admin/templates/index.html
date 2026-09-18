@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Visão geral</h1>
+
+<h2>Fila global (todos os clientes)</h2>
+<div class="card">
+  <div class="stats">
+    <div class="stat"><span class="stat-value">{{ fila.pending }}</span><span class="stat-label">Pending</span></div>
+    <div class="stat"><span class="stat-value">{{ fila.enriching }}</span><span class="stat-label">Enriching</span></div>
+    <div class="stat"><span class="stat-value">{{ fila.ready_tse }}</span><span class="stat-label">Ready TSE</span></div>
+    <div class="stat"><span class="stat-value">{{ fila.checking }}</span><span class="stat-label">Checking</span></div>
+    <div class="stat"><span class="stat-value ok">{{ fila.done }}</span><span class="stat-label">Done</span></div>
+    <div class="stat"><span class="stat-value err">{{ fila.error }}</span><span class="stat-label">Error</span></div>
+  </div>
+</div>
+
+<h2>Consumo por cliente</h2>
+{% if clientes %}
+<table>
+  <thead><tr>
+    <th>E-mail</th>
+    <th>Hoje</th>
+    <th>Mês</th>
+    <th>Limite mensal</th>
+    <th>% mensal</th>
+    <th>Override?</th>
+    <th>Nota</th>
+  </tr></thead>
+  <tbody>
+  {% for c in clientes %}
+    <tr>
+      <td><strong>{{ c.email }}</strong><br><span class="muted cpf">{{ c.user_id[:8] }}…</span></td>
+      <td>{{ c.consumo_hoje }} / {{ c.limite_diario }}</td>
+      <td>{{ c.consumo_mes }} / {{ c.limite_mensal }}</td>
+      <td>{{ c.limite_mensal }}</td>
+      <td>
+        <div class="progress-mini"><div class="progress-mini-fill {% if c.pct_mes >= 90 %}danger{% elif c.pct_mes >= 70 %}warn{% endif %}" style="width: {{ c.pct_mes }}%"></div></div>
+        {{ c.pct_mes }}%
+      </td>
+      <td>{% if c.override %}<span class="badge badge-processing">custom</span>{% else %}<span class="muted">default</span>{% endif %}</td>
+      <td class="muted">{{ c.nota }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card empty">Nenhum cliente cadastrado.</div>
+{% endif %}
+
+<h2>Lotes recentes</h2>
+<table>
+  <thead><tr>
+    <th>Cliente</th>
+    <th>Arquivo</th>
+    <th>Status</th>
+    <th>Total</th>
+    <th>Criado</th>
+  </tr></thead>
+  <tbody>
+  {% for b in batches %}
+    <tr>
+      <td>{{ b.email }}</td>
+      <td>{{ b.filename or '(sem nome)' }}</td>
+      <td><span class="badge badge-{{ b.status }}">{{ b.status }}</span></td>
+      <td>{{ b.total }}</td>
+      <td>{{ b.created_at | dt }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% endblock %}

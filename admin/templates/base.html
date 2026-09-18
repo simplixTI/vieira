@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Admin — Vieira TSE</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f9; color: #1c2733; margin: 0; font-size: 14px; }
+  .topbar { background: #1e3a5f; color: white; padding: 12px 24px; display: flex; gap: 8px; align-items: center; }
+  .topbar strong { margin-right: 20px; font-size: 15px; }
+  .topbar a { color: white; text-decoration: none; padding: 6px 14px; border-radius: 6px; font-size: 13.5px; }
+  .topbar a:hover { background: rgba(255,255,255,0.15); }
+  .topbar a.active { background: #2b5288; font-weight: 600; }
+  .container { padding: 24px; max-width: 1400px; margin: 0 auto; }
+  h1 { color: #1e3a5f; margin: 0 0 20px; font-size: 22px; }
+  h2 { color: #1e3a5f; margin: 24px 0 12px; font-size: 16px; text-transform: uppercase; letter-spacing: 0.04em; }
+  table { width: 100%; background: white; border-collapse: collapse; border-radius: 8px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(16,42,70,0.08); }
+  th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #dbe2ea; font-size: 13.5px; vertical-align: middle; }
+  thead th { background: #eef2f7; color: #1e3a5f; text-transform: uppercase; font-size: 11px; letter-spacing: 0.04em; font-weight: 700; }
+  tbody tr:hover { background: #f8faff; }
+  .card { background: white; padding: 20px 24px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(16,42,70,0.08); }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .stat { padding: 14px; background: #fafbfc; border-radius: 8px; border: 1px solid #dbe2ea; }
+  .stat-value { font-size: 24px; font-weight: 700; color: #1e3a5f; line-height: 1; }
+  .stat-label { font-size: 11px; text-transform: uppercase; color: #66788c; letter-spacing: 0.04em; margin-top: 4px; display: block; }
+  .stat-value.err { color: #b3372f; }
+  .stat-value.warn { color: #9a6b00; }
+  .stat-value.ok { color: #1f7a4d; }
+  .btn { display: inline-block; padding: 6px 12px; background: #1e3a5f; color: white; text-decoration: none; border-radius: 6px; font-size: 12px; border: none; cursor: pointer; font-family: inherit; }
+  .btn:hover { background: #2b5288; }
+  .btn-warn { background: #9a6b00; }
+  .btn-warn:hover { background: #b58200; }
+  .btn-danger { background: #b3372f; }
+  .btn-danger:hover { background: #d0453d; }
+  .btn-ghost { background: transparent; color: #1e3a5f; border: 1px solid #1e3a5f; }
+  .badge { padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; display: inline-block; }
+  .badge-error { background: #fbe9e7; color: #b3372f; }
+  .badge-done { background: #e3f4ec; color: #1f7a4d; }
+  .badge-processing { background: #fdf3d7; color: #9a6b00; }
+  .badge-pending, .badge-enriching, .badge-ready_tse, .badge-checking { background: #eef2f7; color: #1e3a5f; }
+  input[type=text], select { padding: 8px 12px; border: 1px solid #dbe2ea; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box; font-family: inherit; }
+  label { display: block; font-size: 12px; color: #66788c; margin: 12px 0 4px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 20px; }
+  .progress-mini { display: inline-block; width: 120px; height: 6px; background: #dbe2ea; border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 8px; }
+  .progress-mini-fill { height: 100%; background: #1f7a4d; transition: width 0.3s; }
+  .progress-mini-fill.warn { background: #9a6b00; }
+  .progress-mini-fill.danger { background: #b3372f; }
+  .muted { color: #66788c; font-size: 12px; }
+  .cpf { font-family: "SF Mono", Consolas, monospace; font-size: 12.5px; }
+  form.inline { display: inline; margin: 0; }
+  .empty { text-align: center; padding: 40px; color: #66788c; }
+  .subtabs { margin-bottom: 16px; }
+  .subtabs a { padding: 4px 12px; text-decoration: none; color: #1e3a5f; font-size: 13px; border-radius: 6px; margin-right: 4px; }
+  .subtabs a.active { background: #1e3a5f; color: white; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <strong>Vieira TSE — Admin</strong>
+  <a href="/" {% if request.path == '/' %}class="active"{% endif %}>📊 Visão geral</a>
+  <a href="/errors" {% if request.path == '/errors' %}class="active"{% endif %}>❌ Erros</a>
+  <a href="/incomplete" {% if request.path.startswith('/incomplete') %}class="active"{% endif %}>⚠️ Sem zona/seção</a>
+</div>
+<div class="container">
+{% block body %}{% endblock %}
+</div>
+</body>
+</html>

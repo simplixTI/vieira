@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Registros sem zona/seção <span class="muted">({{ regs|length }})</span></h1>
+<p class="muted">Registros com <code>status=done</code> mas <strong>sem zona eleitoral</strong> (só bateu situação, não o "onde vota"). Você pode preencher os campos manualmente aqui e o cliente vê imediatamente no portal dele.</p>
+
+{% if regs %}
+<table>
+  <thead><tr>
+    <th>CPF</th>
+    <th>Nome</th>
+    <th>Cliente</th>
+    <th>Elegibilidade</th>
+    <th>Motivo</th>
+    <th>Verificado</th>
+    <th>Ações</th>
+  </tr></thead>
+  <tbody>
+  {% for r in regs %}
+    <tr>
+      <td class="cpf">{{ r.cpf }}</td>
+      <td>{{ r.nome or '—' }}</td>
+      <td>{{ r.email }}</td>
+      <td><span class="badge badge-{% if r.elegibilidade == 'apto' %}done{% elif r.elegibilidade in ['inapto_cancelado','inapto_suspenso','inapto_transferido'] %}error{% else %}processing{% endif %}">{{ r.elegibilidade or '—' }}</span></td>
+      <td class="muted">{{ r.motivo_situacao or '—' }}</td>
+      <td>{{ r.checked_at | dt }}</td>
+      <td><a class="btn" href="/records/{{ r.id }}/edit?back=/incomplete">✎ Editar</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card empty">Nenhum registro sem zona/seção. 👍</div>
+{% endif %}
+
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Registros com erro <span class="muted">({{ regs|length }})</span></h1>
+<p class="muted">Últimos 200 registros com <code>status=error</code>. Clique em <strong>Reprocessar</strong> pra devolver à fila (attempts zerados, status=ready_tse).</p>
+
+{% if regs %}
+<table>
+  <thead><tr>
+    <th>CPF</th>
+    <th>Nome</th>
+    <th>Cliente</th>
+    <th>Lote</th>
+    <th>Tentativas</th>
+    <th>Motivo</th>
+    <th>Atualizado</th>
+    <th>Ações</th>
+  </tr></thead>
+  <tbody>
+  {% for r in regs %}
+    <tr>
+      <td class="cpf">{{ r.cpf }}</td>
+      <td>{{ r.nome or '—' }}</td>
+      <td>{{ r.email }}</td>
+      <td class="muted">{{ r.filename or '—' }}</td>
+      <td>{{ r.attempts }}</td>
+      <td class="muted">{{ r.motivo_situacao or '—' }}</td>
+      <td>{{ r.updated_at | dt }}</td>
+      <td>
+        <form class="inline" method="post" action="/records/{{ r.id }}/retry">
+          <button class="btn btn-warn" type="submit">↻ Reprocessar</button>
+        </form>
+        <a class="btn btn-ghost" href="/records/{{ r.id }}/edit?back=/errors">✎ Editar</a>
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card empty">Nenhum registro com erro. 🎉</div>
+{% endif %}
+
+{% endblock %}

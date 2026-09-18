@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Editar registro <span class="muted">#{{ reg.id }}</span></h1>
+<p class="muted">CPF <code class="cpf">{{ reg.cpf }}</code> — última verificação: {{ reg.checked_at | dt }}</p>
+
+<div class="card">
+<form method="post" action="/records/{{ reg.id }}/edit">
+  <input type="hidden" name="back" value="{{ back }}">
+
+  <div class="form-grid">
+    <div>
+      <label>Nome</label>
+      <input type="text" name="nome" value="{{ reg.nome or '' }}">
+    </div>
+    <div>
+      <label>Elegibilidade</label>
+      <select name="elegibilidade">
+        <option value="">— não alterar —</option>
+        {% for v in ['apto','inapto_cancelado','inapto_suspenso','inapto_transferido','regularizar_tse'] %}
+          <option value="{{ v }}" {% if reg.elegibilidade == v %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Zona eleitoral</label>
+      <input type="text" name="zona_eleitoral" value="{{ reg.zona_eleitoral or '' }}">
+    </div>
+    <div>
+      <label>Seção</label>
+      <input type="text" name="secao_eleitoral" value="{{ reg.secao_eleitoral or '' }}">
+    </div>
+    <div>
+      <label>Município</label>
+      <input type="text" name="municipio_votacao" value="{{ reg.municipio_votacao or '' }}">
+    </div>
+    <div>
+      <label>UF</label>
+      <input type="text" name="uf" value="{{ reg.uf or '' }}">
+    </div>
+    <div>
+      <label>Local de votação</label>
+      <input type="text" name="local_votacao" value="{{ reg.local_votacao or '' }}">
+    </div>
+    <div>
+      <label>Bairro</label>
+      <input type="text" name="bairro_votacao" value="{{ reg.bairro_votacao or '' }}">
+    </div>
+    <div style="grid-column: 1 / -1;">
+      <label>Endereço</label>
+      <input type="text" name="endereco_votacao" value="{{ reg.endereco_votacao or '' }}">
+    </div>
+  </div>
+
+  <div style="margin-top: 20px; display: flex; gap: 8px;">
+    <button class="btn" type="submit">💾 Salvar</button>
+    <a class="btn btn-ghost" href="{{ back }}">Cancelar</a>
+  </div>
+</form>
+</div>
+
+<h2>Dados brutos</h2>
+<div class="card">
+<table style="box-shadow: none;">
+  {% for k, v in reg.items() %}
+    <tr><th style="width: 30%;">{{ k }}</th><td>{{ v if v is not none else '—' }}</td></tr>
+  {% endfor %}
+</table>
+</div>
+
+{% endblock %}

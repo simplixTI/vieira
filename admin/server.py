@@ -1,9 +1,9 @@
 """
 admin/server.py — Dashboard admin do portal Vieira TSE.
 
-Rodando em 127.0.0.1:8001 (só localhost). Acesso via SSH tunnel:
-    ssh -L 8001:localhost:8001 -i ~/.ssh/vps-db-179 root@179.198.117.127
-Aí abre http://localhost:8001/ no seu navegador.
+Rodando em 127.0.0.1:8765 (só localhost). Acesso via SSH tunnel:
+    ssh -L 8765:localhost:8765 -i ~/.ssh/vps-db-179 root@179.198.117.127
+Aí abre http://localhost:8765/ no seu navegador.
 
 Usa SERVICE_KEY do Supabase (bypassa RLS) — nunca deve ser exposto publicamente.
 """
@@ -200,5 +200,5 @@ def health():
 
 
 if __name__ == "__main__":
-    # localhost-only. Nunca 0.0.0.0.
-    app.run(host="127.0.0.1", port=8001, debug=False)
+    # localhost-only. Nunca 0.0.0.0. (porta 8001 já em uso por outro docker na VPS)
+    app.run(host="127.0.0.1", port=8765, debug=False)

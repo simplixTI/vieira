@@ -48,6 +48,7 @@
       <main class="container">
         <h2>Enviar nova lista de CPFs</h2>
         <p class="muted">Arquivos aceitos: <strong>.csv</strong>, <strong>.txt</strong>, <strong>.xlsx</strong> ou <strong>.xls</strong> — até <strong>40.000 CPFs</strong> por lote. O processamento avança automaticamente (<strong>até 6.000 CPFs por dia</strong>) — acompanhe o progresso no painel.</p>
+        <p class="muted" data-feature="celular" hidden>Colunas aceitas no arquivo: <strong>CPF</strong> (obrigatório) + <strong>Nome</strong> + <strong>Celular</strong> (opcional — vai junto no resultado exportado).</p>
 
         <div class="card">
           <input type="file" id="file-input" accept=".csv,.txt,.xlsx,.xls">
@@ -97,6 +98,7 @@
           <form id="form-avulsa" autocomplete="off">
             <div class="avulsa-row">
               <input type="text" id="avulsa-cpf" placeholder="000.000.000-00" inputmode="numeric" maxlength="14" aria-label="CPF a consultar">
+              <input type="text" id="avulsa-cel" placeholder="(11) 99999-9999" inputmode="tel" maxlength="16" aria-label="Celular (opcional)" data-feature="celular" hidden>
               <button type="submit" class="btn btn-primary" id="btn-avulsa">Consultar</button>
             </div>
             <div id="avulsa-msg" class="msg avulsa-msg" role="status"></div>
@@ -151,6 +153,7 @@
                 <tr>
                   <th>CPF</th>
                   <th>Nome</th>
+                  <th data-feature="celular" hidden>Celular</th>
                   <th>Elegibilidade</th>
                   <th>Zona</th>
                   <th>Seção</th>

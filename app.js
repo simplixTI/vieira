@@ -75,6 +75,12 @@
   var LOOKUP_CHUNK = 500;   // ~6 KB de URL; blocos maiores o PostgREST recusa
 
   function buscarJaConsultados(cpfs, onProgress) {
+    // Usa a função cpfs_ja_consultados() do banco em vez de consultar a tabela:
+    // a conta tem vários logins e o RLS esconde de cada um os lotes dos outros.
+    // Consultar direto só acharia os CPFs do próprio login e deixaria passar
+    // repetição entre colegas — que é justamente o que a conta veio evitar.
+    // A função devolve só metadado (data, quem consultou) para registro alheio;
+    // resultado eleitoral de outro login nunca chega aqui.
     var achados = {};
     if (!cpfs.length) return Promise.resolve(achados);
     var chain = Promise.resolve();
@@ -82,11 +88,8 @@
     for (var i = 0; i < cpfs.length; i += LOOKUP_CHUNK) {
       (function (slice) {
         chain = chain.then(function () {
-          // RLS já limita aos registros do próprio cliente — não precisa filtrar por user_id
           return state.client
-            .from('voter_records')
-            .select('id,cpf,status,checked_at,batch_id,elegibilidade,zona_eleitoral,secao_eleitoral,municipio_votacao')
-            .in('cpf', slice)
+            .rpc('cpfs_ja_consultados', { p_cpfs: slice })
             .then(function (res) {
               if (res.error) throw res.error;
               (res.data || []).forEach(function (r) { achados[r.cpf] = r; });
@@ -97,6 +100,20 @@
       })(cpfs.slice(i, i + LOOKUP_CHUNK));
     }
     return chain.then(function () { return achados; });
+  }
+
+  // Detalhe eleitoral de um registro PRÓPRIO (o RLS autoriza). Só é chamado
+  // quando o pré-check disse e_meu=true.
+  function detalheDoMeuRegistro(cpf) {
+    return state.client
+      .from('voter_records')
+      .select('id,cpf,status,checked_at,batch_id,elegibilidade,zona_eleitoral,secao_eleitoral,municipio_votacao')
+      .eq('cpf', cpf)
+      .limit(1)
+      .then(function (res) {
+        if (res.error || !res.data || !res.data.length) return null;
+        return res.data[0];
+      });
   }
 
   function jaFoiConsultado(reg) {
@@ -114,6 +131,14 @@
   }
 
   function motivoJaConsultado(reg, lotes) {
+    // Registro de outro login da conta: identifica QUEM consultou, pra pessoa
+    // saber a quem pedir o resultado (o lote dela o portal não pode mostrar).
+    if (!reg.e_meu) {
+      var porQuem = ' por ' + (reg.quem || 'outro login');
+      if (reg.status !== 'done') return 'Já está na fila de consulta' + porQuem;
+      return 'Já consultado' + porQuem
+        + (reg.checked_at ? ' em ' + formatDateTime(reg.checked_at) : '');
+    }
     var lote = (lotes || []).find(function (b) { return b.id === reg.batch_id; });
     var ondeTxt = lote ? ' (lote ' + batchLabel(lote) + ')' : '';
     if (reg.status !== 'done') {
@@ -591,7 +616,24 @@
     if (hasCelular() && $('#avulsa-cel')) $('#avulsa-cel').value = '';
 
     if (!reg) {   // sumiu entre uma consulta e outra — não trava o cliente
-      setAvulsaMsg('Este CPF já consta na sua base. Procure por ele no dashboard.', 'warn');
+      setAvulsaMsg('Este CPF já consta na base da sua conta. Procure por ele no dashboard.', 'warn');
+      return;
+    }
+
+    // CPF consultado por OUTRO login da conta: não gastamos consulta nova, mas
+    // o resultado está num lote que este login não enxerga. Diz quem consultou
+    // para a pessoa saber a quem pedir a exportação.
+    if (!reg.e_meu) {
+      var quem = reg.quem || 'outro login';
+      if (reg.status !== 'done') {
+        setAvulsaMsg('⏳ O CPF ' + formatCPF(cpf) + ' já está na fila de consulta, enviado por '
+          + quem + '. Nenhuma consulta nova foi gasta — peça o resultado a ' + quem + '.', 'pending');
+      } else {
+        setAvulsaMsg('ℹ️ O CPF ' + formatCPF(cpf) + ' já foi consultado por ' + quem
+          + (reg.checked_at ? ' em ' + formatDateTime(reg.checked_at) : '')
+          + '. Nenhuma consulta nova foi gasta. O resultado está no lote de ' + quem
+          + ' — peça a exportação a ' + quem + '.', 'warn');
+      }
       return;
     }
 
@@ -601,18 +643,24 @@
     if (reg.status !== 'done') {
       setAvulsaMsg('⏳ O CPF ' + formatCPF(cpf) + ' já está na fila de consulta' + onde
         + '. O resultado aparece na tabela assim que sair — sem gastar uma nova consulta.', 'pending');
-    } else {
-      var extras = [];
-      if (reg.zona_eleitoral) extras.push('Zona ' + reg.zona_eleitoral);
-      if (reg.secao_eleitoral) extras.push('Seção ' + reg.secao_eleitoral);
-      if (reg.municipio_votacao) extras.push(reg.municipio_votacao);
-      var extrasTxt = extras.length ? ' — ' + extras.join(' · ') : '';
-      setAvulsaMsg('✅ Este CPF já foi consultado em ' + formatDateTime(reg.checked_at) + onde
-        + '. Resultado: ' + elegLabel(reg.elegibilidade) + extrasTxt
-        + '. Nenhuma consulta nova foi gasta.', 'ok');
+      if (reg.batch_id) loadBatches(reg.batch_id);
+      return;
     }
 
-    if (reg.batch_id) loadBatches(reg.batch_id);
+    // Registro próprio e concluído: busca o detalhe eleitoral (o RLS autoriza)
+    // e mostra o resultado que já está salvo.
+    detalheDoMeuRegistro(cpf).then(function (d) {
+      var extras = [];
+      if (d && d.zona_eleitoral) extras.push('Zona ' + d.zona_eleitoral);
+      if (d && d.secao_eleitoral) extras.push('Seção ' + d.secao_eleitoral);
+      if (d && d.municipio_votacao) extras.push(d.municipio_votacao);
+      var extrasTxt = extras.length ? ' — ' + extras.join(' · ') : '';
+      var resultado = d ? elegLabel(d.elegibilidade) : '(ver na tabela)';
+      setAvulsaMsg('✅ Este CPF já foi consultado em ' + formatDateTime(reg.checked_at) + onde
+        + '. Resultado: ' + resultado + extrasTxt
+        + '. Nenhuma consulta nova foi gasta.', 'ok');
+      if (reg.batch_id) loadBatches(reg.batch_id);
+    });
   }
 
   function rememberAvulsaBatch() {

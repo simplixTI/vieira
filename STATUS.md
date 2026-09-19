@@ -190,10 +190,10 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
   `simplixTI/leovieirafilho` (mesmo backend, isolado por RLS), com a coluna **Celular**
   opcional por tenant (migration 005 + `FEATURES.celular` no `config.js`).
 - **19/09 — Dedupe de CPF por cliente** (migration 006 + portal): um CPF consultado nunca
-  mais é consultado nem cobrado. Motivador medido no banco: **9 CPFs repetidos** (8 da
-  Priscila, 1 do Leo), **todos vindos da consulta avulsa** — havia caso de CPF consultado
-  às 19:12 e de novo às 19:13. A migration apagou as 9 linhas excedentes mantendo a consulta
-  mais recente de cada uma. Desenho completo em
+  mais é consultado nem cobrado. Motivador medido no banco: CPFs repetidos **todos vindos
+  da consulta avulsa** — havia caso de CPF consultado às 19:12 e de novo às 19:13.
+  A migration apagou **10 linhas excedentes** (261 → 251 registros), mantendo a consulta
+  mais recente de cada CPF. Desenho completo em
   `docs/superpowers/specs/2026-09-19-dedupe-cpf-design.md`.
 - **Migrations aplicadas: 001–006.**
 - **PENDENTE 18/09+:** Priscila usar as 100 do trial e (a) pagar → subir limite pra 50000 (comando

@@ -38,10 +38,12 @@ done
 # a mao no do Leo. O diff abaixo mostra exatamente o que falta.
 echo
 echo "=== index.html: diferencas (esperado APENAS o nome na marca) ==="
-diff "$CLONE/index.html" "$ORIGEM/index.html" || true
+# --strip-trailing-cr: os clones podem ter finais de linha diferentes (CRLF/LF)
+# e sem isto o diff acusa o arquivo inteiro, escondendo a mudanca real.
+diff --strip-trailing-cr "$CLONE/index.html" "$ORIGEM/index.html" || true
 echo
 echo "=== config.js: diferencas (esperado APENAS FEATURES.celular) ==="
-diff "$CLONE/config.js" "$ORIGEM/config.js" || true
+diff --strip-trailing-cr "$CLONE/config.js" "$ORIGEM/config.js" || true
 echo
 echo "Se o diff do index.html mostrar blocos novos alem do nome da marca,"
 echo "aplique-os a mao em $CLONE/index.html antes de publicar."

@@ -152,11 +152,24 @@ ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 \
   "cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker"
 ```
 
-**Env vars do serviço** (drop-in em `/etc/systemd/system/vieira-tse-worker.service.d/limits.conf`):
-- `LIMITE_MENSAL_POR_CLIENTE=100` — **trial da Priscila** (default de produção é 50000).
-- `LIMITE_DIARIO_POR_CLIENTE=100` — trial da Priscila (default 6000).
-- Pra liberar após Priscila pagar: `sed -i 's/=100/=50000/;...' limits.conf`, `daemon-reload`, `restart`
-  (comando completo no card final da sessão de 17/09).
+**Env vars do serviço** (drop-in em `/etc/systemd/system/vieira-tse-worker.service.d/limits.conf`) —
+conferido na VPS em 19/09, **sem trial em lugar nenhum**:
+- `LIMITE_MENSAL_POR_CLIENTE=55000` — teto padrão, aplicado a **toda conta sem override**.
+- `LIMITE_DIARIO_POR_CLIENTE=6000` — idem.
+
+⚠️ Apesar do nome (`..._POR_CLIENTE`, herdado), desde a migration 007 o teto é **por CONTA**:
+a conta Vieira tem 4 logins que **dividem** esses 55.000, não um teto cada.
+
+**Teto diferente pra uma conta específica** — grave na tabela em vez de mexer no systemd
+(o env é global e afeta todas as contas):
+```sql
+insert into limites_por_conta (conta_id, limite_mensal, limite_diario, nota)
+values ('<conta_id>', 80000, 8000, 'contrato X')
+on conflict (conta_id) do update
+  set limite_mensal = excluded.limite_mensal, limite_diario = excluded.limite_diario;
+```
+Hoje a tabela está **vazia** — as duas contas rodam no default global. Consumo em 19/09:
+Vieira 248/55000 (0,5%), Leo Vieira Filho 25/55000.
 
 **Janela manual (só pra debug local, opcional):**
 ```
@@ -191,10 +204,9 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
 - **17/09 — Worker migrado pra VPS Hostinger 24/7** ([commit 93f5cf9](https://github.com/simplixTI/vieira/commit/93f5cf9)):
   novo modo `--daemon` + serviço systemd `vieira-tse-worker` rodando em `/opt/vieira-tse/`.
   Task Scheduler do Windows local desabilitado.
-- **17/09 — Priscila em trial:** anderson@ renomeado pra `priscila@vieira.com.br` (mesmo
-  user_id); histórico de teste (2 avulsas) apagado; limite de 100 consultas/mês configurado
-  via env vars do systemd (`LIMITE_MENSAL_POR_CLIENTE=100` + `LIMITE_DIARIO_POR_CLIENTE=100`).
-  Ao estourar, o worker pausa a fila dela e o webhook alerta o ADM.
+- **17/09 — Priscila entra:** anderson@ renomeado pra `priscila@vieira.com.br` (mesmo user_id);
+  histórico de teste (2 avulsas) apagado. Entrou com limite de trial (100/mês), **encerrado
+  desde então** — em 19/09 a VPS já estava com o teto de produção 55000/6000.
 - **18/09 — Dashboard admin interno** (`admin/`, Flask em 127.0.0.1:8765 via SSH tunnel):
   visão por cliente, aba de erros, aba "Sem zona/seção" com botão "Reprocessar TSE"
   (é um UPDATE na linha, não um insert — não passa pelo dedupe).
@@ -215,8 +227,8 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
   Worker (`repo.mapa_lotes_donos` agora devolve conta), admin (painel por conta) e portal
   (pré-check via `cpfs_ja_consultados`) acompanharam.
 - **Migrations aplicadas: 001–007.**
-- **PENDENTE 18/09+:** Priscila usar as 100 do trial e (a) pagar → subir limite pra 50000 (comando
-  no §6); ou (b) não pagar → banir o usuário via painel Supabase Auth (`Users → priscila → Ban`).
+- **Trial encerrado — nada pendente de cobrança.** Vieira e Leo Vieira Filho são contratos
+  normais, ambos no teto padrão 55000/mês, sem override na `limites_por_conta`.
 - Elegibilidade: `apto` / `inapto_cancelado` / `inapto_suspenso` / `inapto_transferido` /
   `regularizar_tse` (CPF sem título). Mapa em `worker/repo.py:mapear_elegibilidade`.
 

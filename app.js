@@ -765,7 +765,21 @@
       })
       .catch(function (err) {
         if (!handleAuthError(err)) {
-          setAvulsaMsg('Falha ao enviar consulta: ' + (err && err.message ? err.message : 'erro inesperado.'), 'error');
+          // "Cannot coerce the result to a single JSON object" = o insert não
+          // devolveu linha porque o trigger de dedupe descartou (CPF já está na
+          // conta). Erro cru do PostgREST não diz nada ao cliente — traduz.
+          var msg = (err && err.message) ? String(err.message) : '';
+          if (msg.indexOf('coerce') !== -1 || msg.indexOf('0 rows') !== -1) {
+            buscarJaConsultados([cpf]).then(function (achados) {
+              return lotesParaRotulo().then(function (lotes) {
+                mostrarJaConsultado(cpf, achados[cpf], lotes);
+              });
+            }).catch(function () {
+              setAvulsaMsg('Este CPF já consta na base da sua conta e não será consultado de novo.', 'warn');
+            });
+          } else {
+            setAvulsaMsg('Falha ao enviar consulta: ' + (msg || 'erro inesperado.'), 'error');
+          }
         }
       })
       .finally(function () {

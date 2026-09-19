@@ -63,6 +63,66 @@
     return !!(b && (b.filename || '') === AVULSA_FILENAME);
   }
 
+  // ---------- CPFs já consultados (dedupe por cliente) ----------
+  // Um CPF já consultado nunca mais é consultado para o mesmo cliente: repetir
+  // custaria 1 chamada de API paga (fase A) + 1 consulta da cota (fase B) e criaria
+  // uma segunda linha do mesmo CPF — dois históricos e duplicata no CSV exportado.
+  // A garantia dura é do banco (índice único user_id+cpf + trigger); o que segue
+  // existe para o cliente SABER por que o CPF não entrou, em vez de sumir calado.
+  // Exceção: CPF em 'error' definitivo não bloqueia — o cliente não recebeu nada,
+  // e ao reenviar o banco reaproveita a linha original em vez de duplicar.
+
+  var LOOKUP_CHUNK = 500;   // ~6 KB de URL; blocos maiores o PostgREST recusa
+
+  function buscarJaConsultados(cpfs, onProgress) {
+    var achados = {};
+    if (!cpfs.length) return Promise.resolve(achados);
+    var chain = Promise.resolve();
+    var feitos = 0;
+    for (var i = 0; i < cpfs.length; i += LOOKUP_CHUNK) {
+      (function (slice) {
+        chain = chain.then(function () {
+          // RLS já limita aos registros do próprio cliente — não precisa filtrar por user_id
+          return state.client
+            .from('voter_records')
+            .select('id,cpf,status,checked_at,batch_id,elegibilidade,zona_eleitoral,secao_eleitoral,municipio_votacao')
+            .in('cpf', slice)
+            .then(function (res) {
+              if (res.error) throw res.error;
+              (res.data || []).forEach(function (r) { achados[r.cpf] = r; });
+              feitos += slice.length;
+              if (onProgress) onProgress(Math.min(feitos, cpfs.length), cpfs.length);
+            });
+        });
+      })(cpfs.slice(i, i + LOOKUP_CHUNK));
+    }
+    return chain.then(function () { return achados; });
+  }
+
+  function jaFoiConsultado(reg) {
+    return !!reg && reg.status !== 'error';
+  }
+
+  // Lotes só para rotular a mensagem ("lote fulano.xlsx"). Consulta própria porque
+  // a tela de upload pode ser aberta antes do dashboard carregar state.batches.
+  function lotesParaRotulo() {
+    if (state.batches && state.batches.length) return Promise.resolve(state.batches);
+    return state.client
+      .from('batches')
+      .select('id,filename,created_at')
+      .then(function (res) { return res.error ? [] : (res.data || []); });
+  }
+
+  function motivoJaConsultado(reg, lotes) {
+    var lote = (lotes || []).find(function (b) { return b.id === reg.batch_id; });
+    var ondeTxt = lote ? ' (lote ' + batchLabel(lote) + ')' : '';
+    if (reg.status !== 'done') {
+      return 'Já está na fila de consulta' + ondeTxt;
+    }
+    var quando = reg.checked_at ? formatDateTime(reg.checked_at) : '';
+    return 'Já consultado' + (quando ? ' em ' + quando : '') + ondeTxt;
+  }
+
   // ---------- validação de CPF ----------
   function cpfDigit(digits, multipliers) {
     var sum = 0;
@@ -226,6 +286,9 @@
     hide($('#upload-summary'));
     hide($('#upload-progress'));
     hide($('#rejections-wrap'));
+    hide($('#repetidos-wrap'));
+    $('#btn-confirm-upload').hidden = false;
+    $('#btn-confirm-upload').disabled = false;
     setMsg($('#upload-error'), '');
     state.pendingFile = null;
   }
@@ -236,45 +299,86 @@
     if (!file) return;
 
     setMsg($('#upload-error'), 'Lendo arquivo…');
+    var parsed = null;
     readFileAsRows(file)
       .then(function (rows) {
+        parsed = parseRows(rows);
+        if (!parsed.records.length) return { achados: {}, lotes: [] };
+        // Antes de aceitar, descobre quais desses CPFs o cliente já consultou.
+        setMsg($('#upload-error'), 'Verificando CPFs já consultados…');
+        return lotesParaRotulo().then(function (lotes) {
+          var cpfs = parsed.records.map(function (r) { return r.cpf; });
+          return buscarJaConsultados(cpfs, function (feitos, total) {
+            if (total > LOOKUP_CHUNK) {
+              setMsg($('#upload-error'), 'Verificando CPFs já consultados… ' + feitos + ' de ' + total);
+            }
+          }).then(function (achados) { return { achados: achados, lotes: lotes }; });
+        });
+      })
+      .then(function (ctx) {
         setMsg($('#upload-error'), '');
-        var parsed = parseRows(rows);
+
+        var aceitos = [];
+        var repetidos = [];
+        parsed.records.forEach(function (rec) {
+          var reg = ctx.achados[rec.cpf];
+          if (jaFoiConsultado(reg)) {
+            repetidos.push({ cpf: rec.cpf, motivo: motivoJaConsultado(reg, ctx.lotes) });
+          } else {
+            aceitos.push(rec);
+          }
+        });
+
         state.pendingFile = {
           filename: file.name,
-          records: parsed.records,
+          records: aceitos,
           total: parsed.records.length + parsed.rejected.length,
           rejected: parsed.rejected,
+          repetidos: repetidos,
         };
 
         $('#stat-total').textContent = state.pendingFile.total;
-        $('#stat-aceitos').textContent = parsed.records.length;
+        $('#stat-aceitos').textContent = aceitos.length;
         $('#stat-rejeitados').textContent = parsed.rejected.length;
+        $('#stat-repetidos').textContent = repetidos.length;
 
-        var list = $('#rejections-list');
-        list.textContent = '';
-        if (parsed.rejected.length) {
-          parsed.rejected.slice(0, 20).forEach(function (r) {
-            var li = document.createElement('li');
-            var cpfSpan = document.createElement('code');
-            cpfSpan.textContent = r.cpf ? formatCPF(r.cpf) : '(vazio)';
-            li.appendChild(cpfSpan);
-            li.appendChild(document.createTextNode(' — ' + r.motivo));
-            list.appendChild(li);
-          });
-          show($('#rejections-wrap'));
-        } else {
-          hide($('#rejections-wrap'));
-        }
+        preencherLista($('#rejections-list'), parsed.rejected);
+        $('#rejections-wrap').hidden = !parsed.rejected.length;
+        preencherLista($('#repetidos-list'), repetidos);
+        $('#repetidos-wrap').hidden = !repetidos.length;
 
-        if (parsed.records.length === 0) {
-          setMsg($('#upload-error'), 'Nenhum CPF válido encontrado no arquivo. Verifique o formato e tente novamente.');
+        // Só faz sentido confirmar se sobrou algo novo pra consultar.
+        $('#btn-confirm-upload').hidden = aceitos.length === 0;
+
+        if (aceitos.length === 0) {
+          setMsg($('#upload-error'), repetidos.length
+            ? 'Todos os CPFs válidos deste arquivo já foram consultados antes — nada a enviar. Os resultados estão no dashboard.'
+            : 'Nenhum CPF válido encontrado no arquivo. Verifique o formato e tente novamente.');
         }
         show($('#upload-summary'));
       })
       .catch(function (err) {
+        if (handleAuthError(err)) return;
         setMsg($('#upload-error'), 'Erro ao ler o arquivo: ' + (err && err.message ? err.message : 'formato não suportado.'));
       });
+  }
+
+  function preencherLista(el, itens) {
+    el.textContent = '';
+    itens.slice(0, 20).forEach(function (r) {
+      var li = document.createElement('li');
+      var cpfSpan = document.createElement('code');
+      cpfSpan.textContent = r.cpf ? formatCPF(r.cpf) : '(vazio)';
+      li.appendChild(cpfSpan);
+      li.appendChild(document.createTextNode(' — ' + r.motivo));
+      el.appendChild(li);
+    });
+    if (itens.length > 20) {
+      var li = document.createElement('li');
+      li.className = 'muted';
+      li.textContent = '… e mais ' + (itens.length - 20) + '.';
+      el.appendChild(li);
+    }
   }
 
   function readFileAsRows(file) {
@@ -479,6 +583,38 @@
     el.textContent = text || '';
   }
 
+  // CPF já consultado: mostra o resultado que já está salvo em vez de gastar uma
+  // consulta nova, e leva o cliente até a linha correspondente.
+  function mostrarJaConsultado(cpf, reg, lotes) {
+    stopAvulsaWatch();
+    $('#avulsa-cpf').value = '';
+    if (hasCelular() && $('#avulsa-cel')) $('#avulsa-cel').value = '';
+
+    if (!reg) {   // sumiu entre uma consulta e outra — não trava o cliente
+      setAvulsaMsg('Este CPF já consta na sua base. Procure por ele no dashboard.', 'warn');
+      return;
+    }
+
+    var lote = (lotes || []).find(function (b) { return b.id === reg.batch_id; });
+    var onde = lote ? ' (lote ' + batchLabel(lote) + ')' : '';
+
+    if (reg.status !== 'done') {
+      setAvulsaMsg('⏳ O CPF ' + formatCPF(cpf) + ' já está na fila de consulta' + onde
+        + '. O resultado aparece na tabela assim que sair — sem gastar uma nova consulta.', 'pending');
+    } else {
+      var extras = [];
+      if (reg.zona_eleitoral) extras.push('Zona ' + reg.zona_eleitoral);
+      if (reg.secao_eleitoral) extras.push('Seção ' + reg.secao_eleitoral);
+      if (reg.municipio_votacao) extras.push(reg.municipio_votacao);
+      var extrasTxt = extras.length ? ' — ' + extras.join(' · ') : '';
+      setAvulsaMsg('✅ Este CPF já foi consultado em ' + formatDateTime(reg.checked_at) + onde
+        + '. Resultado: ' + elegLabel(reg.elegibilidade) + extrasTxt
+        + '. Nenhuma consulta nova foi gasta.', 'ok');
+    }
+
+    if (reg.batch_id) loadBatches(reg.batch_id);
+  }
+
   function rememberAvulsaBatch() {
     var found = (state.batches || []).find(isAvulsaBatch);
     state.avulsaBatchId = found ? found.id : null;
@@ -534,21 +670,43 @@
     }
     var btn = $('#btn-avulsa');
     btn.disabled = true;
-    setAvulsaMsg('⏳ Enviando CPF para a fila…', 'pending');
+    setAvulsaMsg('⏳ Verificando…', 'pending');
 
-    ensureAvulsaBatch()
-      .then(function (batchId) {
-        var payload = { batch_id: batchId, cpf: cpf };
-        if (hasCelular() && celular) payload.celular = celular;
-        return state.client
-          .from('voter_records')
-          .insert(payload)
-          .select('id')
-          .single();
+    // Antes de gastar: este CPF já foi consultado? Era aqui que a repetição
+    // acontecia — CPF digitado duas vezes com um minuto de diferença queimava
+    // duas chamadas de API paga e duas consultas da cota.
+    buscarJaConsultados([cpf])
+      .then(function (achados) {
+        var reg = achados[cpf];
+        if (jaFoiConsultado(reg)) {
+          return lotesParaRotulo().then(function (lotes) {
+            mostrarJaConsultado(cpf, reg, lotes);
+            return null;
+          });
+        }
+        setAvulsaMsg('⏳ Enviando CPF para a fila…', 'pending');
+        return ensureAvulsaBatch().then(function (batchId) {
+          var payload = { batch_id: batchId, cpf: cpf };
+          if (hasCelular() && celular) payload.celular = celular;
+          return state.client
+            .from('voter_records')
+            .insert(payload)
+            .select('id');
+        });
       })
       .then(function (res) {
+        if (res === null) return;           // já consultado — mensagem já exibida
         if (res.error) throw res.error;
-        var recordId = res.data.id;
+        // Zero linhas = o trigger do banco descartou (corrida: o CPF entrou por
+        // outra aba entre o pré-check e o insert). Mostra o que já existe.
+        if (!res.data || !res.data.length) {
+          return buscarJaConsultados([cpf]).then(function (achados) {
+            return lotesParaRotulo().then(function (lotes) {
+              mostrarJaConsultado(cpf, achados[cpf], lotes);
+            });
+          });
+        }
+        var recordId = res.data[0].id;
         setAvulsaMsg('⏳ Consultando CPF ' + formatCPF(cpf) + ' no TSE… O resultado aparece na tabela abaixo em segundos a alguns minutos.', 'pending');
         $('#avulsa-cpf').value = '';
         if (hasCelular() && $('#avulsa-cel')) $('#avulsa-cel').value = '';

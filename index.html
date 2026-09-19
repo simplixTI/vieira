@@ -59,11 +59,18 @@
               <div class="stat"><span class="stat-value" id="stat-total">0</span><span class="stat-label">CPFs lidos</span></div>
               <div class="stat stat-ok"><span class="stat-value" id="stat-aceitos">0</span><span class="stat-label">Válidos</span></div>
               <div class="stat stat-bad"><span class="stat-value" id="stat-rejeitados">0</span><span class="stat-label">Rejeitados</span></div>
+              <div class="stat stat-warn"><span class="stat-value" id="stat-repetidos">0</span><span class="stat-label">Já consultados</span></div>
             </div>
 
             <div id="rejections-wrap" hidden>
               <h3>Motivos de rejeição (primeiros 20)</h3>
               <ul id="rejections-list" class="rejections"></ul>
+            </div>
+
+            <div id="repetidos-wrap" hidden>
+              <h3>Já consultados anteriormente (primeiros 20)</h3>
+              <p class="note">Estes CPFs já estão na sua base e <strong>não serão consultados de novo</strong> — o resultado já está salvo no dashboard e sai na exportação. Você não é cobrado por eles.</p>
+              <ul id="repetidos-list" class="rejections rejections-info"></ul>
             </div>
 
             <button class="btn btn-primary" id="btn-confirm-upload">Confirmar envio</button>

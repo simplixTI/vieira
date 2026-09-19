@@ -616,7 +616,7 @@
     if (hasCelular() && $('#avulsa-cel')) $('#avulsa-cel').value = '';
 
     if (!reg) {   // sumiu entre uma consulta e outra — não trava o cliente
-      setAvulsaMsg('Este CPF já consta na base da sua conta. Procure por ele no dashboard.', 'warn');
+      setAvulsaMsg('O CPF digitado já foi consultado! Procure por ele no dashboard.', 'warn');
       return;
     }
 
@@ -626,13 +626,12 @@
     if (!reg.e_meu) {
       var quem = reg.quem || 'outro login';
       if (reg.status !== 'done') {
-        setAvulsaMsg('⏳ O CPF ' + formatCPF(cpf) + ' já está na fila de consulta, enviado por '
-          + quem + '. Nenhuma consulta nova foi gasta — peça o resultado a ' + quem + '.', 'pending');
+        setAvulsaMsg('⏳ O CPF digitado já está na fila de consulta, enviado por ' + quem
+          + '. Nenhuma consulta nova foi gasta.', 'pending');
       } else {
-        setAvulsaMsg('ℹ️ O CPF ' + formatCPF(cpf) + ' já foi consultado por ' + quem
+        setAvulsaMsg('✅ O CPF digitado já foi consultado por ' + quem
           + (reg.checked_at ? ' em ' + formatDateTime(reg.checked_at) : '')
-          + '. Nenhuma consulta nova foi gasta. O resultado está no lote de ' + quem
-          + ' — peça a exportação a ' + quem + '.', 'warn');
+          + '. Nenhuma consulta nova foi gasta — peça o resultado a ' + quem + '.', 'ok');
       }
       return;
     }
@@ -641,7 +640,7 @@
     var onde = lote ? ' (lote ' + batchLabel(lote) + ')' : '';
 
     if (reg.status !== 'done') {
-      setAvulsaMsg('⏳ O CPF ' + formatCPF(cpf) + ' já está na fila de consulta' + onde
+      setAvulsaMsg('⏳ O CPF digitado já está na fila de consulta' + onde
         + '. O resultado aparece na tabela assim que sair — sem gastar uma nova consulta.', 'pending');
       if (reg.batch_id) loadBatches(reg.batch_id);
       return;
@@ -656,8 +655,8 @@
       if (d && d.municipio_votacao) extras.push(d.municipio_votacao);
       var extrasTxt = extras.length ? ' — ' + extras.join(' · ') : '';
       var resultado = d ? elegLabel(d.elegibilidade) : '(ver na tabela)';
-      setAvulsaMsg('✅ Este CPF já foi consultado em ' + formatDateTime(reg.checked_at) + onde
-        + '. Resultado: ' + resultado + extrasTxt
+      setAvulsaMsg('✅ O CPF digitado já foi consultado! Resultado: ' + resultado + extrasTxt
+        + ' — consultado em ' + formatDateTime(reg.checked_at) + onde
         + '. Nenhuma consulta nova foi gasta.', 'ok');
       if (reg.batch_id) loadBatches(reg.batch_id);
     });
@@ -775,7 +774,7 @@
                 mostrarJaConsultado(cpf, achados[cpf], lotes);
               });
             }).catch(function () {
-              setAvulsaMsg('Este CPF já consta na base da sua conta e não será consultado de novo.', 'warn');
+              setAvulsaMsg('O CPF digitado já foi consultado! Ele não será consultado de novo.', 'warn');
             });
           } else {
             setAvulsaMsg('Falha ao enviar consulta: ' + (msg || 'erro inesperado.'), 'error');

@@ -239,6 +239,11 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
   ```
   O script **não** copia `config.js`/`index.html` (são do tenant) — ele mostra o diff pra
   você aplicar à mão o que for estrutural. Clone: `git clone https://github.com/simplixTI/leovieirafilho`.
+- **BUMP OBRIGATÓRIO do `?v=` no `index.html`** (`app.js?v=AAAAMMDD<letra>`) a cada deploy que
+  mexa em `app.js`/`styles.css`, **nos dois portais**. Sem isso o navegador do cliente continua
+  rodando o JS antigo contra o banco novo: em 19/09 o portal do Leo mostrou *"Cannot coerce the
+  result to a single JSON object"* exatamente por isso (JS pré-dedupe recebendo zero linha do
+  insert descartado pelo trigger). O `sincroniza_portal_leo.sh` avisa se as versões divergirem.
 - Ao alterar `worker/` ou `export_vps/`, lembrar: push main → SSH na VPS →
   `cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker`.
 - **Chave SSH** da VPS: `~/.ssh/vps-db-179` (ED25519, autorizada em `authorized_keys` do root).

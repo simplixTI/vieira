@@ -33,3 +33,7 @@ Thumbs.db
 .DS_Store
 .vscode/
 .idea/
+
+# Artefatos de teste de navegador (Playwright MCP) e CSVs de teste com CPF real
+.playwright-mcp/
+portal_tse/teste_dedupe.csv

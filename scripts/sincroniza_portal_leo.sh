@@ -47,6 +47,21 @@ diff --strip-trailing-cr "$CLONE/config.js" "$ORIGEM/config.js" || true
 echo
 echo "Se o diff do index.html mostrar blocos novos alem do nome da marca,"
 echo "aplique-os a mao em $CLONE/index.html antes de publicar."
+
+# Cache-busting: sem bump do ?v=, o navegador do cliente continua rodando o
+# app.js velho contra o banco novo. Foi o que quebrou o portal do Leo em 19/09.
+V_ORIGEM=$(grep -o 'app\.js?v=[0-9a-z]*' "$ORIGEM/index.html" | head -1 | cut -d= -f2)
+V_CLONE=$(grep -o 'app\.js?v=[0-9a-z]*' "$CLONE/index.html" | head -1 | cut -d= -f2)
+echo
+if [ -z "$V_ORIGEM" ]; then
+  echo "AVISO: portal/index.html nao tem ?v= em app.js — cache-busting ausente."
+elif [ "$V_ORIGEM" != "$V_CLONE" ]; then
+  echo "ATENCAO: versao de cache difere — origem='$V_ORIGEM' clone='$V_CLONE'."
+  echo "Atualize o ?v= no index.html do Leo para '$V_ORIGEM' antes de publicar,"
+  echo "senao o cliente dele continua com o app.js antigo em cache."
+else
+  echo "cache-busting: ?v=$V_ORIGEM igual nos dois. OK."
+fi
 echo
 git -C "$CLONE" status --short
 echo

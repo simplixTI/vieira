@@ -118,31 +118,28 @@ def _parar_pedido() -> bool:
     return False
 
 
-# cache de e-mail por user_id (evita bater no GoTrue 2x no mesmo mês)
-_cache_emails: dict = {}
+# cache de nome por conta_id (evita reconsultar no mesmo mês)
+_cache_nomes_conta: dict = {}
 
 
-def _email_do_cliente(user_id) -> str:
+def _nome_da_conta(conta_id, sb=None) -> str:
     """
-    Resolve e-mail do cliente via GoTrue admin API (service key). Qualquer
-    falha → devolve o próprio user_id (o aviso continua, só menos legível).
+    Nome da conta para o aviso ao ADM ficar legível ("Vieira" em vez de um uuid).
+
+    ⚠️ Desde a migration 007 o teto é por CONTA, não por login: o cliente Vieira
+    tem 4 logins dividindo uma cota. Por isso o aviso identifica a conta — dizer
+    o e-mail de um dos logins daria a impressão errada de que só ele estourou.
+    Qualquer falha → devolve o próprio conta_id (o aviso continua, menos legível).
     """
-    if user_id in _cache_emails:
-        return _cache_emails[user_id]
-    email = user_id
+    if conta_id in _cache_nomes_conta:
+        return _cache_nomes_conta[conta_id]
+    nome = conta_id
     try:
-        from config_worker import load_config
-        cfg = load_config()
-        import requests
-        r = requests.get(f"{cfg.supabase_url}/auth/v1/admin/users/{user_id}",
-                         headers={"Authorization": f"Bearer {cfg.supabase_service_key}"},
-                         timeout=10)
-        if r.status_code == 200:
-            email = (r.json() or {}).get("email") or user_id
+        nome = repo.mapa_rotulos_contas(sb).get(conta_id) or conta_id
     except Exception:
         pass
-    _cache_emails[user_id] = email
-    return email
+    _cache_nomes_conta[conta_id] = nome
+    return nome
 
 
 def _classificar(res: dict, cpf_esperado: str) -> str:
@@ -185,7 +182,7 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
     # O check DIÁRIO roda antes do MENSAL — qualquer um dos dois barra.
     limite_diario_default = int(getattr(repo, "LIMITE_DIARIO_POR_CLIENTE", 0) or 0)
     limite_mensal_default = int(getattr(repo, "LIMITE_MENSAL_POR_CLIENTE", 0) or 0)
-    overrides = repo.mapa_limites_por_cliente(sb)  # user_id → {'mensal':N,'diario':N}
+    overrides = repo.mapa_limites_por_cliente(sb)  # conta_id → {"mensal":N,"diario":N}
 
     def lim_diario_de(dono):
         v = overrides.get(dono, {}).get("diario")
@@ -247,7 +244,7 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
         # ── Tetos por dono do lote: além do limite, NÃO toca o registro ──
         # DIÁRIO primeiro; MENSAL depois (qualquer um barra). Skip mensal
         # dispara aviso único ao admin (tabela avisos_limite garante 1x/mês).
-        # Cada dono pode ter override em limites_por_cliente; senão cai no default global.
+        # Cada dono pode ter override em limites_por_conta; senão cai no default global.
         if tem_algum_limite:
             dono = mapa_donos.get(reg.get("batch_id"))
             if dono is not None:
@@ -258,7 +255,7 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
                     stats["aguardando_diario"] += 1
                     if dono not in avisados_limite:
                         avisados_limite.add(dono)
-                        print(f"  ⏸️  cliente {str(dono)[:8]} atingiu o limite diário "
+                        print(f"  ⏸️  conta {str(dono)[:8]} atingiu o limite diário "
                               f"({lim_d}) — registros aguardam amanhã.")
                     continue
                 if lim_m > 0 and usados_mes.get(dono, 0) >= lim_m:
@@ -266,20 +263,21 @@ def _rodar_fase_b(limite: int, sb, processados_antes: int = 0,
                     stats["aguardando_mensal"] += 1
                     if dono not in avisados_mensal:
                         avisados_mensal.add(dono)
-                        print(f"  🚧 cliente {str(dono)[:8]} atingiu o LIMITE MENSAL "
+                        print(f"  🚧 conta {str(dono)[:8]} atingiu o LIMITE MENSAL "
                               f"({lim_m}) — aguardando liberação comercial (ADM).")
                     try:
                         if repo.avisar_limite_mensal(dono, lim_m, sb=sb):
                             try:
-                                email = _email_do_cliente(dono)
+                                nome = _nome_da_conta(dono, sb)
                             except Exception:
-                                email = dono  # resolução falhou → avisa com user_id mesmo
+                                nome = dono  # resolução falhou → avisa com o id mesmo
                             try:
-                                notificar(f"🚨 LIMITE MENSAL ATINGIDO — cliente {email} "
+                                notificar(f"🚨 LIMITE MENSAL ATINGIDO — conta {nome} "
                                           f"({dono}) consumiu {lim_m} consultas em "
-                                          f"{datetime.now():%m/%Y}. CPFs aguardando nova "
-                                          f"cobrança; processamento pausado para este "
-                                          f"cliente até liberação.")
+                                          f"{datetime.now():%m/%Y}. A cota é da CONTA "
+                                          f"(somando todos os logins dela). CPFs "
+                                          f"aguardando nova cobrança; processamento "
+                                          f"pausado para esta conta até liberação.")
                             except Exception as e:
                                 print(f"      ⚠️  webhook falhou (avisar limite mensal): {e}")
                     except Exception as e:

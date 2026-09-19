@@ -65,12 +65,20 @@ def home():
     inicio_hoje = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
 
     mapa_b = _mapa_batches()
-    # cliente → user_id (via batches)
-    dono = {bid: b.get("user_id") for bid, b in mapa_b.items()}
+    # A unidade de cobrança é a CONTA (migration 007), não o login: o cliente
+    # Vieira tem vários logins dividindo UMA cota. Agrupar por user_id aqui
+    # mostraria N linhas cada uma com a cota cheia — leitura errada na hora de
+    # decidir cobrança. Então: lote → conta do dono.
+    vinculos = sb.table("contas_usuarios").select("user_id,conta_id,rotulo").execute().data or []
+    conta_de_user = {v["user_id"]: v["conta_id"] for v in vinculos}
+    rotulo_de_user = {v["user_id"]: (v.get("rotulo") or "") for v in vinculos}
+    nome_conta = {c["id"]: c["nome"]
+                  for c in (sb.table("contas").select("id,nome").execute().data or [])}
+    dono = {bid: conta_de_user.get(b.get("user_id")) for bid, b in mapa_b.items()}
 
     overrides = {
-        r["user_id"]: r
-        for r in (sb.table("limites_por_cliente").select("*").execute().data or [])
+        r["conta_id"]: r
+        for r in (sb.table("limites_por_conta").select("*").execute().data or [])
     }
 
     # consumos
@@ -96,19 +104,29 @@ def home():
         r = sb.table("voter_records").select("id", count="exact").eq("status", st).execute()
         fila[st] = r.count or 0
 
-    clientes = []
+    # Uma linha por CONTA, listando os logins que a compõem.
+    logins_da_conta = defaultdict(list)
     for uid, email in users.items():
-        ov = overrides.get(uid, {})
+        cid = conta_de_user.get(uid)
+        if cid:
+            logins_da_conta[cid].append(rotulo_de_user.get(uid) or email)
+
+    clientes = []
+    for cid, nome in nome_conta.items():
+        ov = overrides.get(cid, {})
         lim_d = ov.get("limite_diario") or DEFAULT_DIARIO
         lim_m = ov.get("limite_mensal") or DEFAULT_MENSAL
+        membros = sorted(logins_da_conta.get(cid, []))
         clientes.append({
-            "user_id": uid,
-            "email": email,
-            "consumo_hoje": hoje_por_user.get(uid, 0),
-            "consumo_mes": mes_por_user.get(uid, 0),
+            "user_id": cid,                       # id da conta (template mostra 8 chars)
+            "email": nome,                        # nome da conta
+            "membros": ", ".join(membros) or "(sem login)",
+            "qtd_logins": len(membros),
+            "consumo_hoje": hoje_por_user.get(cid, 0),
+            "consumo_mes": mes_por_user.get(cid, 0),
             "limite_diario": lim_d,
             "limite_mensal": lim_m,
-            "pct_mes": min(100, round((mes_por_user.get(uid, 0) / max(lim_m, 1)) * 100)),
+            "pct_mes": min(100, round((mes_por_user.get(cid, 0) / max(lim_m, 1)) * 100)),
             "override": bool(ov),
             "nota": ov.get("nota", ""),
         })

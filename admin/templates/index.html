@@ -29,7 +29,9 @@
   <tbody>
   {% for c in clientes %}
     <tr>
-      <td><strong>{{ c.email }}</strong><br><span class="muted cpf">{{ c.user_id[:8] }}…</span></td>
+      <td><strong>{{ c.email }}</strong><br>
+          <span class="muted">{{ c.qtd_logins }} login{% if c.qtd_logins != 1 %}s{% endif %}: {{ c.membros }}</span><br>
+          <span class="muted cpf">conta {{ c.user_id[:8] }}…</span></td>
       <td>{{ c.consumo_hoje }} / {{ c.limite_diario }}</td>
       <td>{{ c.consumo_mes }} / {{ c.limite_mensal }}</td>
       <td>{{ c.limite_mensal }}</td>

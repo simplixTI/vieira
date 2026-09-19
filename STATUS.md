@@ -22,8 +22,8 @@ nascimento via APIs pagas) → consulta TSE → grava resultado → dashboard at
 
 | Item | Valor |
 |---|---|
-| **Portal 1 — Priscila** | https://simplixti.github.io/vieira/ · login `priscila@vieira.com.br` / `Vieira@2026` (renomeado de anderson em 17/09 via GoTrue admin; **user_id preservado** `e4685c8b...`) |
-| **Portal 2 — Leo Vieira Filho** | https://simplixti.github.io/leovieirafilho/ · user_id `e17b74c1...` · único com `FEATURES.celular = true` |
+| **Portal 1 — conta Vieira** | https://simplixti.github.io/vieira/ · **4 logins, senha `Vieira@2026` em todos**: `priscila@` (`e4685c8b...`, renomeado de anderson em 17/09, user_id preservado), `priscila01@`, `priscila02@`, `priscila03@` — todos `@vieira.com.br`. Conta `20b322ba...` |
+| **Portal 2 — conta Leo Vieira Filho** | https://simplixti.github.io/leovieirafilho/ · login `glaucio@leovieirafilho.com.br` (`e17b74c1...`) · único com `FEATURES.celular = true` |
 | Projeto Supabase | `TSE_VIEIRA` — ref `wipthjinvcyglbeuxxsb` (Canadá Central) — **um banco só; os dois clientes são isolados por RLS/`user_id`** |
 | Repo do código + portal 1 | https://github.com/simplixTI/vieira (`main` = código; `gh-pages` = portal da Priscila, publicado de `portal/`) |
 | Repo do portal 2 | https://github.com/simplixTI/leovieirafilho (**`main` = portal publicado**, arquivos na raiz, sem pasta `portal/`) |
@@ -44,7 +44,8 @@ portal/        SPA estática (vanilla JS + supabase-js + SheetJS). Zero build.
 worker/        Python. main.py (loop fases A+B), repo.py (Supabase), tse_client.py (HTTP TSE),
                fase_a.py (enriquecimento), config_worker.py, run_worker.bat, STOP (parada)
 supabase/      migrations/ (001_inicial, 002_retry_erros, 003_limite_mensal,
-               004_limites_por_cliente, 005_celular, 006_dedupe_cpf) + aplica_schema.py
+               004_limites_por_cliente, 005_celular, 006_dedupe_cpf,
+               007_contas) + aplica_schema.py
 admin/         Dashboard interno (Flask, 127.0.0.1:8765 via SSH tunnel, usa SERVICE_KEY)
 portal_tse/    Ferramentas de descoberta: probe_rede.py (captura XHR), tse_http_client.py,
                pega_js_tse.py, testa_upload_portal.py (Playwright), .venv próprio
@@ -99,16 +100,29 @@ Headers fixos em TODAS as chamadas: `api-authorization: c6f7e0616edfef74aee7cde0
   processamento do cliente pausa + **aviso único ao ADM no webhook** ("🚨 LIMITE MENSAL..."),
   dedup pela tabela `avisos_limite` (1x por cliente por mês).
   **Para liberar após nova cobrança:** subir o env ou apagar a linha do cliente em `avisos_limite` pro mês.
-- **Dedupe de CPF por cliente (migration 006):** um CPF já consultado **nunca mais** é
-  consultado para aquele cliente — repetir custava 1 chamada de API paga + 1 consulta da cota
+- **CONTA é a unidade de cobrança (migration 007).** Um cliente = uma conta = N logins.
+  A conta Vieira tem 4 logins que dividem **uma** cota e **uma** base de CPFs; a conta
+  Leo Vieira Filho tem 1. Tabelas `contas` + `contas_usuarios` (`user_id → conta_id`, com
+  `rotulo` exibido no portal). **RLS não mudou**: cada login vê só os próprios lotes — a
+  "parede" entre as pessoas do mesmo contrato foi pedido explícito do cliente.
+  ⚠️ **Criar cliente novo agora tem 2 passos**: criar o usuário no GoTrue **e** vincular em
+  `contas_usuarios`. Sem vínculo, o trigger recusa os inserts dele com mensagem explícita.
+- **Dedupe de CPF por conta (migrations 006 + 007):** um CPF já consultado **nunca mais** é
+  consultado para aquela conta — repetir custava 1 chamada de API paga + 1 consulta da cota
   e criava uma 2ª linha do mesmo CPF (dois históricos, duplicata no CSV).
-  Garantia no banco: coluna `voter_records.user_id` + **índice único `(user_id, cpf)`** +
+  Garantia no banco: `voter_records.conta_id` + **índice único `(conta_id, cpf)`** +
   trigger `voter_records_dedupe_trg` (before insert). O trigger descarta o insert em silêncio
-  quando o CPF já tem resultado ou está na fila; quando o CPF está em `error` terminal,
-  **reaproveita a linha original** (move pro lote novo, volta a `pending`, zera `attempts`)
-  em vez de duplicar. O portal avisa o cliente antes, com data e lote da consulta anterior.
-  Escopo por cliente, não global. **Sem janela de reconsulta** — liberar é manual.
+  quando o CPF já tem resultado ou está na fila; quando está em `error` terminal,
+  **reaproveita a linha original** — movendo pro lote novo se for da mesma pessoa, ou
+  reenfileirando no lugar se for de outro login (mover arrancaria linha do lote alheio).
+  **Sem janela de reconsulta** — liberar é manual (`delete` da linha).
   ⚠️ O trigger só dispara em INSERT: worker e admin (que fazem UPDATE) não são afetados.
+- **Pré-check do portal atravessa a parede sem vazar resultado:** a função
+  `cpfs_ja_consultados(text[])` (`security definer`) responde "este CPF já existe na conta?"
+  devolvendo só metadado — data e **qual login** consultou. Resultado eleitoral de outro
+  login **nunca** chega ao portal; o próprio o portal lê direto da tabela, via RLS.
+  Existe porque consultar a tabela direto só acharia os CPFs do próprio login, deixando
+  passar a repetição entre colegas — exatamente o que a conta veio evitar.
 - **Custo de enriquecimento:** 1 chamada API B por CPF (Hashiro só se API B falhar). Worker loga o total.
 - Contagem de cota = registros `done` no período + `error` retentados no período.
 - **Modo `--daemon`** (usado no systemd da VPS): em vez de sair quando a fila zera, dorme
@@ -195,7 +209,12 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
   A migration apagou **10 linhas excedentes** (261 → 251 registros), mantendo a consulta
   mais recente de cada CPF. Desenho completo em
   `docs/superpowers/specs/2026-09-19-dedupe-cpf-design.md`.
-- **Migrations aplicadas: 001–006.**
+- **19/09 — Conceito de CONTA** (migration 007): a conta Vieira ganhou 3 logins novos
+  (`priscila01/02/03@vieira.com.br`) para que cada pessoa veja só os próprios lotes, sem
+  multiplicar custo. Dedupe e cota passaram de `user_id` para `conta_id`; RLS intocado.
+  Worker (`repo.mapa_lotes_donos` agora devolve conta), admin (painel por conta) e portal
+  (pré-check via `cpfs_ja_consultados`) acompanharam.
+- **Migrations aplicadas: 001–007.**
 - **PENDENTE 18/09+:** Priscila usar as 100 do trial e (a) pagar → subir limite pra 50000 (comando
   no §6); ou (b) não pagar → banir o usuário via painel Supabase Auth (`Users → priscila → Ban`).
 - Elegibilidade: `apto` / `inapto_cancelado` / `inapto_suspenso` / `inapto_transferido` /

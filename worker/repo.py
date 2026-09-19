@@ -205,11 +205,37 @@ def pegar_prontos_tse(limite: int = 200, sb: "Client | None" = None) -> list[dic
 # ─────────────────────────────────────────────
 # TETO DIÁRIO/MENSAL DE CONSULTAS TSE POR CLIENTE
 # ─────────────────────────────────────────────
+TABELA_CONTAS_USUARIOS = "contas_usuarios"
+
+
 def mapa_lotes_donos(sb: "Client | None" = None) -> dict:
-    """batch_id → batches.user_id (donos dos lotes). 1 query; cachear por lote."""
+    """batch_id → conta_id do dono do lote. 2 queries; cachear por rodada.
+
+    ⚠️ Devolve CONTA, não user_id (migration 007). A unidade de cobrança é a
+    conta: o cliente Vieira tem 4 logins que dividem UMA cota e UMA base de
+    CPFs. Todo o resto da cadeia de teto (consultas_hoje/mes, limites, avisos)
+    opera sobre a chave que sai daqui, então trocar o mapa troca a régua inteira.
+
+    Usuário sem vínculo em `contas_usuarios` cai com conta None e fica FORA do
+    controle de teto — a migration 007 vincula todo mundo, inclusive criando
+    conta automática pra usuário solto, então isso não deveria acontecer.
+    """
     sb = sb or cliente()
-    r = sb.table(TABELA_LOTES).select("id,user_id").execute()
-    return {b["id"]: b.get("user_id") for b in (r.data or [])}
+    lotes = (sb.table(TABELA_LOTES).select("id,user_id").execute()).data or []
+    vinculos = (sb.table(TABELA_CONTAS_USUARIOS)
+                .select("user_id,conta_id").execute()).data or []
+    conta_de = {v["user_id"]: v["conta_id"] for v in vinculos}
+    return {b["id"]: conta_de.get(b.get("user_id")) for b in lotes}
+
+
+def mapa_rotulos_contas(sb: "Client | None" = None) -> dict:
+    """conta_id → nome da conta (para os avisos ao ADM ficarem legíveis)."""
+    sb = sb or cliente()
+    try:
+        r = (sb.table("contas").select("id,nome").execute()).data or []
+    except Exception:
+        return {}
+    return {c["id"]: c.get("nome") for c in r}
 
 
 def _meia_noite_local() -> datetime:
@@ -244,26 +270,27 @@ def _consultas_desde(sb, inicio_iso: str, mapa: dict) -> dict:
     return contagem
 
 
-TABELA_LIMITES = "limites_por_cliente"
+TABELA_LIMITES = "limites_por_conta"
 
 
 def mapa_limites_por_cliente(sb: "Client | None" = None) -> dict:
-    """user_id → {'mensal': N|None, 'diario': N|None} (override dos defaults globais).
+    """conta_id → {'mensal': N|None, 'diario': N|None} (override dos defaults globais).
 
-    Cliente sem linha na tabela usa o default global (`LIMITE_MENSAL_POR_CLIENTE`
-    e `LIMITE_DIARIO_POR_CLIENTE`). Valor `None`/`0` na coluna também cai no default.
+    ⚠️ Chaveado por CONTA desde a migration 007 (era por user_id). Conta sem
+    linha na tabela usa o default global (`LIMITE_MENSAL_POR_CLIENTE` e
+    `LIMITE_DIARIO_POR_CLIENTE`). Valor `None`/`0` na coluna também cai no default.
     """
     sb = sb or cliente()
     try:
         r = (sb.table(TABELA_LIMITES)
-             .select("user_id,limite_mensal,limite_diario")
+             .select("conta_id,limite_mensal,limite_diario")
              .execute()).data or []
     except Exception:
         # tabela ainda não existe → nenhum override (funciona igual a antes)
         return {}
     out: dict = {}
     for row in r:
-        out[row["user_id"]] = {
+        out[row["conta_id"]] = {
             "mensal": row.get("limite_mensal") or None,
             "diario": row.get("limite_diario") or None,
         }
@@ -296,26 +323,28 @@ def mes_atual() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-01")
 
 
-def avisar_limite_mensal(user_id: str, limite: int,
+def avisar_limite_mensal(conta_id: str, limite: int,
                          sb: "Client | None" = None) -> bool:
     """
-    Marca que o cliente atingiu o limite mensal. Retorna True se o aviso é
-    NOVO (caller deve notificar o admin); False se (user_id, mês) já consta —
-    assim o webhook dispara no máximo 1x por cliente por mês, mesmo com várias
-    execuções do worker. 'Reset' mensal = novo mês (ou apagar a linha / subir
-    o LIMITE_MENSAL_POR_CLIENTE).
+    Marca que a CONTA atingiu o limite mensal. Retorna True se o aviso é NOVO
+    (caller deve notificar o admin); False se (conta_id, mês) já consta — assim
+    o webhook dispara no máximo 1x por conta por mês, mesmo com várias execuções
+    do worker e mesmo que vários logins da conta estourem o teto juntos.
+    'Reset' mensal = novo mês (ou apagar a linha / subir o limite).
+
+    ⚠️ Chaveado por CONTA desde a migration 007 (era por user_id).
     """
     sb = sb or cliente()
     mes = mes_atual()
     ex = (sb.table(TABELA_AVISOS)
-          .select("user_id")
-          .eq("user_id", user_id)
+          .select("conta_id")
+          .eq("conta_id", conta_id)
           .eq("mes", mes)
           .execute()).data or []
     if ex:
         return False
     sb.table(TABELA_AVISOS).insert(
-        {"user_id": user_id, "mes": mes, "limite": limite}).execute()
+        {"conta_id": conta_id, "mes": mes, "limite": limite}).execute()
     return True
 
 

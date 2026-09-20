@@ -2,9 +2,11 @@
 
 > **Pro contexto de IA/agente:** este arquivo é o ponto de partida pra retomar o projeto.
 > Leia ele inteiro, depois `.env.portal` (chaves, NUNCA imprima valores) e os arquivos-chave listados abaixo.
-> Última atualização: 2026-09-19 (dedupe de CPF por cliente — um CPF consultado nunca mais é
-> consultado nem cobrado; **segundo cliente (Leo Vieira Filho) com portal próprio**; coluna
-> Celular opcional por tenant; dashboard admin interno).
+> Última atualização: 2026-09-19. Nesta data entraram: **dedupe de CPF** (um CPF consultado
+> nunca mais é consultado nem cobrado, migration 006); **conceito de CONTA** acima do usuário
+> (migration 007 — a conta Vieira tem 4 logins dividindo uma cota e uma base); **segundo
+> cliente** (Leo Vieira Filho) com portal próprio; coluna Celular por tenant; dashboard admin.
+> Antes disso o projeto tinha 1 cliente, 1 login e nenhuma proteção contra CPF repetido.
 
 ---
 
@@ -94,12 +96,13 @@ Headers fixos em TODAS as chamadas: `api-authorization: c6f7e0616edfef74aee7cde0
 - **Anti-stale:** resultado validado contra o CPF pedido antes de gravar.
 - **Retry de erro:** registro em `error` volta pra fila sozinho após 30 min (`RETRY_COOLDOWN_MIN`),
   até `MAX_TENTATIVAS=5` (uma rodada falha consome 2 attempts: checking+1, error+1).
-- **Limite diário por cliente:** `LIMITE_DIARIO_POR_CLIENTE` (default **6000**/dia). Estourou →
-  registros aguardam o dia seguinte, sozinho.
-- **Limite mensal por cliente:** `LIMITE_MENSAL_POR_CLIENTE` (default **50000**/mês). Estourou →
-  processamento do cliente pausa + **aviso único ao ADM no webhook** ("🚨 LIMITE MENSAL..."),
-  dedup pela tabela `avisos_limite` (1x por cliente por mês).
-  **Para liberar após nova cobrança:** subir o env ou apagar a linha do cliente em `avisos_limite` pro mês.
+- **Limite diário por CONTA:** `LIMITE_DIARIO_POR_CLIENTE` (default **6000**/dia — nome do env
+  é herdado, o teto é por conta). Estourou → registros aguardam o dia seguinte, sozinhos.
+- **Limite mensal por CONTA:** `LIMITE_MENSAL_POR_CLIENTE` (default **55000**/mês). Estourou →
+  processamento da conta inteira pausa + **aviso único ao ADM no webhook** ("🚨 LIMITE MENSAL..."),
+  dedup pela tabela `avisos_limite` (1x por conta por mês).
+  **Para liberar após nova cobrança:** gravar override em `limites_por_conta` (preferível ao env,
+  que é global) ou apagar a linha daquela conta em `avisos_limite` pro mês.
 - **CONTA é a unidade de cobrança (migration 007).** Um cliente = uma conta = N logins.
   A conta Vieira tem 4 logins que dividem **uma** cota e **uma** base de CPFs; a conta
   Leo Vieira Filho tem 1. Tabelas `contas` + `contas_usuarios` (`user_id → conta_id`, com
@@ -134,10 +137,15 @@ Headers fixos em TODAS as chamadas: `api-authorization: c6f7e0616edfef74aee7cde0
 
 ## 6. Como operar
 
-**Produção (VPS Hostinger, systemd 24/7):** o worker roda como serviço `vieira-tse-worker`
-em `root@179.198.117.127`, em modo `--daemon` (loop com sleep 5s quando fila zera). Auto-restart
-via systemd, memória limitada a 512 MB, CPU até 80%. Task Scheduler do Windows local está
-**desabilitado** (não usar mais — era do sistema antigo AHK).
+**Produção (VPS Hostinger, systemd 24/7)** em `root@179.198.117.127`, path `/opt/vieira-tse/`.
+São **DOIS serviços systemd no mesmo clone**, e é fácil esquecer o segundo:
+
+| Serviço | O quê |
+|---|---|
+| `vieira-tse-worker` | o worker, modo `--daemon` (sleep 5s quando a fila zera). 512 MB, CPU 80%, auto-restart |
+| `vieira-tse-admin` | o dashboard admin, Flask em `127.0.0.1:8765` (localhost-only) |
+
+Task Scheduler do Windows local está **desabilitado** (era do sistema antigo AHK).
 
 ```bash
 # ── monitorar ──
@@ -148,9 +156,28 @@ ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 "tail -f /opt/vieira-tse/worker/lo
 ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 "systemctl restart vieira-tse-worker"
 
 # ── deploy de código novo (depois de push no git main) ──
+# ⚠️ git pull NÃO reinicia nada. Reinicie os DOIS — em 19/09 o admin ficou
+#    rodando código velho depois de um pull e mostrava uma linha por LOGIN,
+#    cada uma com a cota cheia, em vez de uma por conta.
 ssh -i ~/.ssh/vps-db-179 root@179.198.117.127 \
-  "cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker"
+  "cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker vieira-tse-admin"
 ```
+
+⚠️ **Nunca use `pkill -f '<string>'` dentro de um `ssh "..."`**: a própria linha de comando do
+shell remoto contém a string e o `pkill` se mata, abortando em silêncio tudo que vinha depois
+(foi assim que um `systemctl restart` não aconteceu e o serviço seguiu no PID antigo).
+
+**Abrir o dashboard admin** (localhost-only, exige túnel SSH). Num terminal que fica **aberto**:
+
+```bash
+ssh -N -L 8765:localhost:8765 -i $HOME\.ssh\vps-db-179 -o ExitOnForwardFailure=yes root@179.198.117.127
+```
+Depois abra **http://localhost:8765/**. O `-N` faz só o túnel, sem abrir shell — a janela fica
+**parada e sem escrever nada**, é o comportamento certo; fechar derruba o túnel.
+`-o ExitOnForwardFailure=yes` faz falhar alto se a 8765 já estiver ocupada, em vez de conectar
+e o navegador não abrir nada (era o sintoma de 19/09).
+Abas: **Visão geral** (fila global + consumo por conta + lotes recentes), **Erros** (com retry),
+**Sem zona/seção** (aptidão confirmada mas o TSE não devolveu o local, com "Reprocessar TSE").
 
 **Env vars do serviço** (drop-in em `/etc/systemd/system/vieira-tse-worker.service.d/limits.conf`) —
 conferido na VPS em 19/09, **sem trial em lugar nenhum**:
@@ -168,8 +195,8 @@ values ('<conta_id>', 80000, 8000, 'contrato X')
 on conflict (conta_id) do update
   set limite_mensal = excluded.limite_mensal, limite_diario = excluded.limite_diario;
 ```
-Hoje a tabela está **vazia** — as duas contas rodam no default global. Consumo em 19/09:
-Vieira 248/55000 (0,5%), Leo Vieira Filho 25/55000.
+Hoje a tabela está **vazia** — as duas contas rodam no default global. Consumo atual: ver o
+quadro no fim do §7 (ou, mais confiável, o próprio dashboard admin — o número muda todo dia).
 
 **Janela manual (só pra debug local, opcional):**
 ```
@@ -215,7 +242,8 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
 - **18/09 — Segundo cliente: Leo Vieira Filho.** Portal próprio em
   `simplixTI/leovieirafilho` (mesmo backend, isolado por RLS), com a coluna **Celular**
   opcional por tenant (migration 005 + `FEATURES.celular` no `config.js`).
-- **19/09 — Dedupe de CPF por cliente** (migration 006 + portal): um CPF consultado nunca
+- **19/09 — Dedupe de CPF** (migration 006 + portal; escopo virou CONTA na 007 no mesmo dia):
+  um CPF consultado nunca
   mais é consultado nem cobrado. Motivador medido no banco: CPFs repetidos **todos vindos
   da consulta avulsa** — havia caso de CPF consultado às 19:12 e de novo às 19:13.
   A migration apagou **10 linhas excedentes** (261 → 251 registros), mantendo a consulta
@@ -226,7 +254,25 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
   multiplicar custo. Dedupe e cota passaram de `user_id` para `conta_id`; RLS intocado.
   Worker (`repo.mapa_lotes_donos` agora devolve conta), admin (painel por conta) e portal
   (pré-check via `cpfs_ja_consultados`) acompanharam.
+- **19/09 — Incidente de cache no portal do Leo.** O cliente viu *"Cannot coerce the result to
+  a single JSON object"* numa consulta avulsa. **Não era bug de dado**: o CPF já tinha sido
+  consultado pela conta em 18/09 e o trigger barrou corretamente; o navegador é que rodava o
+  `app.js` antigo (com `.single()`), que estoura ao receber zero linha. Corrigido com `?v=` nos
+  assets + tradução do erro pra mensagem de negócio. **Lição: republicar o portal não basta —
+  sem bump do `?v=`, o cliente continua com o arquivo em cache.**
+- **19/09 — Mensagem de CPF repetido simplificada** a pedido do cliente: lidera com
+  *"O CPF digitado já foi consultado!"* e nunca renderiza em vermelho (ok/warn/pending).
 - **Migrations aplicadas: 001–007.**
+
+**Estado em 19/09 (fim do dia), conferido no admin:**
+
+| Conta | Logins | Hoje | Mês | Teto |
+|---|---|---|---|---|
+| Leo Vieira Filho | glaucio | 387 | 412 | 55.000 |
+| Vieira | priscila + priscila01/02/03 | 80 | 267 | 55.000 |
+
+Fila global: **679 `done`, 0 `error`, 0 em aberto.** Worker e admin ativos na VPS, ambos no
+código mais recente. Portais publicados em `?v=20260919c`.
 - **Trial encerrado — nada pendente de cobrança.** Vieira e Leo Vieira Filho são contratos
   normais, ambos no teto padrão 55000/mês, sem override na `limites_por_conta`.
 - Elegibilidade: `apto` / `inapto_cancelado` / `inapto_suspenso` / `inapto_transferido` /
@@ -256,8 +302,15 @@ Hashiro (fallback): `https://hashirosearch.squareweb.app/?token=...&cpf1={cpf}` 
   rodando o JS antigo contra o banco novo: em 19/09 o portal do Leo mostrou *"Cannot coerce the
   result to a single JSON object"* exatamente por isso (JS pré-dedupe recebendo zero linha do
   insert descartado pelo trigger). O `sincroniza_portal_leo.sh` avisa se as versões divergirem.
-- Ao alterar `worker/` ou `export_vps/`, lembrar: push main → SSH na VPS →
-  `cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker`.
+- Ao alterar `worker/`, `admin/` ou `export_vps/`, lembrar: push main → SSH na VPS →
+  `cd /opt/vieira-tse && git pull && systemctl restart vieira-tse-worker vieira-tse-admin`.
+  **São dois serviços no mesmo clone e o `git pull` não reinicia nenhum** (§6).
+- **Criar cliente/login novo tem DOIS passos**: criar o usuário no GoTrue **e** vincular em
+  `contas_usuarios` (a uma conta existente, se for mais um login do mesmo contrato; a uma conta
+  nova, se for cliente novo). Sem o vínculo o trigger recusa os inserts dele com mensagem
+  explícita. Cadastro público no portal continua desativado.
+- **Teto de uma conta específica**: gravar em `limites_por_conta`, **não** mexer no env do
+  systemd — o env é global e alteraria todas as contas de uma vez (§6).
 - **Chave SSH** da VPS: `~/.ssh/vps-db-179` (ED25519, autorizada em `authorized_keys` do root).
   Se cair de novo (Hostinger reinstala VPS ou senha muda), pedir pro Bruno rodar
   `type $HOME\.ssh\vps-db-179.pub | ssh root@179.198.117.127 "cat >> ~/.ssh/authorized_keys"`

@@ -2,7 +2,7 @@
 
 > **Pro contexto de IA/agente:** este arquivo é o ponto de partida pra retomar o projeto.
 > Leia ele inteiro, depois `.env.portal` (chaves, NUNCA imprima valores) e os arquivos-chave listados abaixo.
-> Última atualização: 2026-09-20.
+> Última atualização: 2026-09-21.
 > **19/09:** **dedupe de CPF** (um CPF consultado nunca mais é consultado nem cobrado,
 > migration 006); **conceito de CONTA** acima do usuário (migration 007 — a conta Vieira tem
 > 4 logins dividindo uma cota e uma base); **segundo cliente** (Leo Vieira Filho) com portal
@@ -10,6 +10,8 @@
 > 1 login e nenhuma proteção contra CPF repetido.
 > **20/09:** investigada a fundo a ausência de zona/seção — **§9**. Leia essa seção antes de
 > tentar "consertar" isso: as três hipóteses óbvias já foram testadas e falharam.
+> **21/09:** 🚨 achado que a senha dos logins do cliente estava em texto claro NESTE arquivo,
+> que é público no GitHub. Removida — mas **é preciso TROCAR a senha**, ver §8.
 
 ---
 
@@ -27,7 +29,7 @@ nascimento via APIs pagas) → consulta TSE → grava resultado → dashboard at
 
 | Item | Valor |
 |---|---|
-| **Portal 1 — conta Vieira** | https://simplixti.github.io/vieira/ · **4 logins, senha `Vieira@2026` em todos**: `priscila@` (`e4685c8b...`, renomeado de anderson em 17/09, user_id preservado), `priscila01@`, `priscila02@`, `priscila03@` — todos `@vieira.com.br`. Conta `20b322ba...` |
+| **Portal 1 — conta Vieira** | https://simplixti.github.io/vieira/ · **4 logins**: `priscila@` (`e4685c8b...`, renomeado de anderson em 17/09, user_id preservado), `priscila01@`, `priscila02@`, `priscila03@` — todos `@vieira.com.br`, mesma senha. Conta `20b322ba...`. **Senha guardada com o Bruno — NUNCA neste arquivo (repo público).** |
 | **Portal 2 — conta Leo Vieira Filho** | https://simplixti.github.io/leovieirafilho/ · login `glaucio@leovieirafilho.com.br` (`e17b74c1...`) · único com `FEATURES.celular = true` |
 | Projeto Supabase | `TSE_VIEIRA` — ref `wipthjinvcyglbeuxxsb` (Canadá Central) — **um banco só; os dois clientes são isolados por RLS/`user_id`** |
 | Repo do código + portal 1 | https://github.com/simplixTI/vieira (`main` = código; `gh-pages` = portal da Priscila, publicado de `portal/`) |
@@ -286,6 +288,12 @@ código mais recente. Portais publicados em `?v=20260919c`.
 
 ## 8. Decisões e convenções pra não requebrar
 
+- 🚨 **ESTE REPOSITÓRIO É PÚBLICO** (`simplixTI/vieira`), e o STATUS.md está publicado nele.
+  **Nunca escreva aqui senha, CPF, chave de API ou dado de eleitor.** Até 20/09 a senha dos 4
+  logins do cliente esteve em texto claro neste arquivo — removida em 21/09, mas **continua no
+  histórico do Git**, então a senha só está de fato protegida depois de ser TROCADA.
+  O que pode ficar aqui: e-mails de login, ids de conta, IP da VPS, caminhos. O que não pode:
+  o valor de qualquer segredo. Segredos vivem em `.env.portal` / `export_vps/.env` (gitignorados).
 - O portal **nunca** vê a service key (só anon key + RLS; updates só via worker).
 - Upload: max 40.000 CPFs por lote (texto do portal cita o ritmo de 6k/dia).
 - CSV exportado com `;` (Excel pt-BR) e BOM UTF-8.
@@ -392,3 +400,33 @@ de contratar.
 - **Bruno está procurando fonte de dados com filiação de eleitor jovem** (20/09). Bureaus de
   crédito provavelmente não resolvem — a informação não existe nesses cadastros. O caminho
   seria fonte de origem diferente (cartório/Receita), não mais um bureau de consumo.
+
+### Avaliando um fornecedor novo de enriquecimento (kit pronto)
+
+Existe um kit de teste montado em **`portal_tse/kit_teste_fornecedor.csv`**
+(gitignorado — contém CPF e nascimento reais, **nunca** subir pro GitHub).
+13 linhas, em dois grupos, e o segundo é o que separa fornecedor bom de fornecedor ruim:
+
+- **10 `alvo`** — jovens de 16 a 29 anos **sem** nome da mãe na base. São os casos que falham
+  hoje. Medem **cobertura**: quantos o fornecedor consegue preencher.
+- **3 `controle`** — CPFs cuja mãe **já conhecemos**, com a resposta certa na coluna
+  `nome_mae_esperado`. Medem **acurácia**. Sem eles não dá pra distinguir "cobertura boa" de
+  "devolve qualquer coisa".
+
+| Resultado do teste | Leitura |
+|---|---|
+| Acerta os 3 controles + cobre boa parte dos 10 alvos | vale contratar |
+| Acerta os controles mas cobre pouco | fornecedor honesto, mesma limitação dos atuais — não resolve |
+| **Erra algum controle** | **descartar** — se erra onde sabemos a resposta, erra onde não sabemos |
+
+⚠️ **Ao pedir teste a um fornecedor, exija amostra de 16–21 anos especificamente.** Amostra
+genérica parece ótima (qualquer bureau acerta 98% dos adultos) e esconde exatamente o buraco
+que se quer tapar. Os controles do kit são de 22/28/30 anos porque quase não há jovem **com**
+mãe conhecida na base — o que já é o próprio sintoma.
+
+Quando houver API em mãos: dá pra rodar o teste completo contra os 46 jovens reais da base
+(script no mesmo molde de `portal_tse/`), em vez da amostra de 10.
+
+⚠️ **LGPD:** o kit é dado pessoal de eleitor real de um cliente. Compartilhar com fornecedor em
+avaliação é finalidade diferente da verificação contratada — mande o mínimo, prefira fornecedor
+com contrato/NDA assinado antes do teste, e não deixe a planilha circulando por e-mail depois.

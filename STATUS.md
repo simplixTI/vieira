@@ -2,11 +2,14 @@
 
 > **Pro contexto de IA/agente:** este arquivo é o ponto de partida pra retomar o projeto.
 > Leia ele inteiro, depois `.env.portal` (chaves, NUNCA imprima valores) e os arquivos-chave listados abaixo.
-> Última atualização: 2026-09-19. Nesta data entraram: **dedupe de CPF** (um CPF consultado
-> nunca mais é consultado nem cobrado, migration 006); **conceito de CONTA** acima do usuário
-> (migration 007 — a conta Vieira tem 4 logins dividindo uma cota e uma base); **segundo
-> cliente** (Leo Vieira Filho) com portal próprio; coluna Celular por tenant; dashboard admin.
-> Antes disso o projeto tinha 1 cliente, 1 login e nenhuma proteção contra CPF repetido.
+> Última atualização: 2026-09-20.
+> **19/09:** **dedupe de CPF** (um CPF consultado nunca mais é consultado nem cobrado,
+> migration 006); **conceito de CONTA** acima do usuário (migration 007 — a conta Vieira tem
+> 4 logins dividindo uma cota e uma base); **segundo cliente** (Leo Vieira Filho) com portal
+> próprio; coluna Celular por tenant; dashboard admin. Antes disso o projeto tinha 1 cliente,
+> 1 login e nenhuma proteção contra CPF repetido.
+> **20/09:** investigada a fundo a ausência de zona/seção — **§9**. Leia essa seção antes de
+> tentar "consertar" isso: as três hipóteses óbvias já foram testadas e falharam.
 
 ---
 
@@ -277,6 +280,9 @@ código mais recente. Portais publicados em `?v=20260919c`.
   normais, ambos no teto padrão 55000/mês, sem override na `limites_por_conta`.
 - Elegibilidade: `apto` / `inapto_cancelado` / `inapto_suspenso` / `inapto_transferido` /
   `regularizar_tse` (CPF sem título). Mapa em `worker/repo.py:mapear_elegibilidade`.
+- **~34% dos registros saem sem zona/seção** — medido, explicado e sem solução com as fontes
+  atuais. **Ver §9** antes de mexer nisso: reprocessar no TSE, reenriquecer e mandar só a data
+  de nascimento já foram testados e os três falharam.
 
 ## 8. Decisões e convenções pra não requebrar
 
@@ -318,3 +324,71 @@ código mais recente. Portais publicados em `?v=20260919c`.
 - **Deploy da VPS ficou lembrado no comando** — não usar Docker aqui (a VPS tem docker rodando
   outros projetos: agente-sap/maturix/pontotel/postgres, mas o worker é 1 serviço systemd puro,
   1 venv, ~40 MB de RAM — mais simples que container).
+
+---
+
+## 9. Limitação medida: zona/seção ausente (investigado em 20/09/2026)
+
+**Resumo:** ~34% dos registros `done` não têm zona/seção. **Isso não é bug e não tem conserto
+com as fontes atuais** — está medido, não suposto. Antes de tentar "arrumar" de novo, leia isto:
+as três hipóteses óbvias já foram testadas e as três falharam.
+
+### Por que falta (355 registros sem zona, medidos em 20/09)
+
+| Causa | Qtd | Tem solução? |
+|---|---|---|
+| Apto, **com** mãe+data — TSE respondeu 403 no `onde-votar` | 160 | ❌ recusa definitiva do TSE |
+| Apto, **sem nome da mãe** (116 só mãe + 46 mãe+data) | 162 | ❌ não com as fontes atuais |
+| Sem título (`regularizar_tse`) ou inapto | 33 | ✅ correto — não tem zona mesmo |
+
+### O que já foi testado e NÃO funciona
+
+1. **Reprocessar no TSE** (botão "Reprocessar TSE" do admin) nos que têm mãe+data:
+   **0 de 15 recuperaram.** Nenhum virou erro, todos seguiram `apto` — a recusa do TSE é
+   **permanente, não transitória**. Reprocessar os 160 gastaria 160 consultas pra recuperar
+   ~zero. **Não faça.**
+2. **Reenriquecer com API B / Hashiro** nos que não têm mãe: **0 de 15 trouxeram a filiação.**
+   E o ponto importante: **11 dos 15 voltaram com status `enriquecido`** — as fontes *têm* a
+   pessoa (devolvem nome, data, título), elas só **não carregam o nome da mãe** dela. Não foi
+   falha pontual nem instabilidade; é lacuna de cobertura do dado.
+3. **Pedir o token do TSE só com `dataNascimento`, sem `nomeMae`** (hipótese: talvez bastasse
+   a data pra subir de nível). Testado direto na API: o token sai com
+   `['BRONZE_NEG','NIQUEL_NEG','FERRO']` — **nunca `ALUMINIO_CPF`** — e o `onde-votar` devolve
+   403 nos 5 testados. **O nome da mãe é obrigatório.** A lógica atual de
+   `tse_client.py` (só tenta a consulta rica com mãe **E** data) está correta — não mexa nela
+   achando que há ganho fácil ali.
+
+### A descoberta que explica tudo: é problema de IDADE
+
+| Faixa | Com nome da mãe | Sem | % sem |
+|---|---|---|---|
+| 16–21 | 7 | 46 | **87%** |
+| 22–29 | 129 | 71 | 36% |
+| 30–44 | 307 | 2 | 1% |
+| 45–59 | 271 | 5 | 2% |
+| 60+ | 130 | 0 | 0% |
+
+**A lacuna é quase inteiramente de eleitores jovens.** Para 30+ as fontes cobrem 98–100%.
+Faz sentido: API B e Hashiro são bureaus de crédito/consumo, e jovem de 17 anos não tem
+rastro nesses cadastros ainda.
+
+**Consequência prática:** o "34% sem zona" não é qualidade ruim do sistema — é concentrado
+numa faixa etária. Campanha mirando 30+ recebe quase 100% completo; campanha de primeiro voto
+perde um terço. **Antes de gastar com fonte nova, meça quantos jovens tem a base do cliente.**
+
+### DataSintese: não está quebrada, está sem créditos
+
+`DATASINTESE_ENABLED = False` em `export_vps/settings.py`, mas as credenciais existem no
+`export_vps/.env`. Testada isoladamente em 20/09: autenticação OK, endpoint responde, e o
+retorno é
+`HTTP 400 {"consumo":{"mensagem":"Você excedeu seus créditos..."}}`.
+Ou seja: **decisão comercial, não problema técnico.** Se recarregar os créditos, basta virar a
+flag pra `True` — a cascata (`enriquecer_cpf`) já cai pra ela corretamente quando as anteriores
+respondem incompletas. Não foi validado se a DataSintese tem filiação de jovem — teste antes
+de contratar.
+
+### Em aberto
+
+- **Bruno está procurando fonte de dados com filiação de eleitor jovem** (20/09). Bureaus de
+  crédito provavelmente não resolvem — a informação não existe nesses cadastros. O caminho
+  seria fonte de origem diferente (cartório/Receita), não mais um bureau de consumo.

@@ -38,3 +38,4 @@ Thumbs.db
 .playwright-mcp/
 portal_tse/teste_dedupe.csv
 portal_tse/kit_teste_fornecedor.csv
+entrega_tse_kit/

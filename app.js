@@ -16,6 +16,37 @@
     return !!(cfg.FEATURES && cfg.FEATURES.celular);
   }
 
+  // ---------- modo manutenção ----------
+  // Suspende ENVIOS NOVOS sem derrubar o portal: o cliente segue entrando,
+  // vendo o que já tem e exportando CSV. Importante porque um lote pode ter
+  // acabado de concluir e o resultado é dele — tirar o portal do ar
+  // esconderia trabalho já pago. A flag vive em config.js (por tenant).
+  function emManutencao() {
+    var cfg = window.PORTAL_CONFIG || {};
+    return !!(cfg.MANUTENCAO && cfg.MANUTENCAO.ativo);
+  }
+
+  function textoManutencao() {
+    var cfg = window.PORTAL_CONFIG || {};
+    return (cfg.MANUTENCAO && cfg.MANUTENCAO.mensagem)
+      || 'As verificações estão pausadas temporariamente. Os resultados já concluídos '
+       + 'continuam disponíveis para consulta e exportação.';
+  }
+
+  function aplicarManutencao() {
+    if (!emManutencao()) return;
+    var banner = $('#manutencao-banner');
+    if (banner) {
+      $('#manutencao-texto').textContent = ' ' + textoManutencao();
+      show(banner);
+    }
+    // Some com o que cria trabalho novo; o resto do portal segue igual.
+    var novoEnvio = $('#btn-new-upload');
+    if (novoEnvio) hide(novoEnvio);
+    var cardAvulsa = document.querySelector('.avulsa-card');
+    if (cardAvulsa) hide(cardAvulsa);
+  }
+
   // ---------- estado ----------
   var state = {
     client: null,
@@ -208,6 +239,7 @@
     bindUpload();
     bindDashboard();
     bindAvulsa();
+    aplicarManutencao();
 
     state.client.auth.getSession().then(function (res) {
       if (res.error) {
@@ -374,6 +406,9 @@
     var file = ev.target.files[0];
     resetUploadView();
     if (!file) return;
+    // Nem roda o pré-check: seria consulta ao banco pra montar um resumo que
+    // o cliente não poderia confirmar.
+    if (emManutencao()) { setMsg($('#upload-error'), textoManutencao()); return; }
 
     setMsg($('#upload-error'), 'Lendo arquivo…');
     var parsed = null;
@@ -562,6 +597,7 @@
   }
 
   function confirmUpload() {
+    if (emManutencao()) { setMsg($('#upload-error'), textoManutencao()); return; }
     var pending = state.pendingFile;
     if (!pending || !pending.records.length) return;
 
@@ -827,6 +863,10 @@
   }
 
   function submitAvulsa() {
+    // Trava em profundidade: aplicarManutencao() esconde o card, mas quem
+    // chegar aqui por outro caminho não pode enfileirar consulta que não
+    // vai concluir — e a fase A cobra API paga antes de tentar o TSE.
+    if (emManutencao()) { setAvulsaMsg(textoManutencao(), 'warn'); return; }
     var raw = $('#avulsa-cpf').value;
     var cpf = normalizeCPF(raw);
     if (cpf.length !== 11) {

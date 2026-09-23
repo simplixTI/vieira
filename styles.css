@@ -516,3 +516,17 @@ td.cel { font-family: "SF Mono", Consolas, monospace; font-size: 13px; }
   .legend-list li { flex-direction: column; gap: 4px; }
   .legend-list .badge { min-width: 0; align-self: flex-start; }
 }
+
+/* Aviso de manutenção — ligado por MANUTENCAO em config.js (STATUS.md §11).
+   Âmbar, não vermelho: não é erro do cliente nem falha do portal, é uma pausa
+   externa. Vermelho faria ele achar que perdeu dado. */
+.manutencao-banner {
+  background: #fef3c7;
+  border-bottom: 2px solid #f59e0b;
+  color: #78350f;
+  padding: 14px 20px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  text-align: center;
+}
+.manutencao-banner strong { color: #92400e; }

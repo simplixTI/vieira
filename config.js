@@ -8,6 +8,22 @@
     FEATURES: {
       celular: false,   // Leo Vieira Filho seta true no config.js dele
     },
+
+    // ── MODO MANUTENÇÃO ──────────────────────────────────────────────────
+    // Suspende ENVIOS NOVOS (lote e consulta avulsa) sem derrubar o portal:
+    // o cliente continua entrando, vendo os resultados que já tem e exportando
+    // o CSV. Ligado em 23/09/2026 porque o TSE passou a exigir captcha no
+    // endpoint de token e nenhuma consulta nova conclui (STATUS.md §11).
+    //
+    // PRA RELIGAR: `ativo: false` aqui, bump do ?v= no index.html, deploy.
+    // Não precisa mexer em app.js. Lembre dos DOIS portais.
+    MANUTENCAO: {
+      ativo: true,
+      mensagem: 'O TSE ativou uma proteção que bloqueia consultas automáticas, '
+        + 'e as verificações estão pausadas até o serviço ser restabelecido. '
+        + 'Os resultados já concluídos continuam disponíveis aqui e podem ser '
+        + 'exportados normalmente. Avisaremos assim que voltar.',
+    },
   };
 
   try {

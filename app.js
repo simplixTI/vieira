@@ -16,6 +16,13 @@
     return !!(cfg.FEATURES && cfg.FEATURES.celular);
   }
 
+  // Consulta avulsa aceita TÍTULO de eleitor (12 dígitos) além de CPF (11).
+  // Só aptidão nesse caso — sem zona/seção (migration 009). Feature por tenant.
+  function hasTitulo() {
+    var cfg = window.PORTAL_CONFIG || {};
+    return !!(cfg.FEATURES && cfg.FEATURES.titulo);
+  }
+
   // ---------- modo manutenção ----------
   // Suspende ENVIOS NOVOS sem derrubar o portal: o cliente segue entrando,
   // vendo o que já tem e exportando CSV. Importante porque um lote pode ter
@@ -734,15 +741,23 @@
       });
   }
 
-  // ---------- CONSULTA AVULSA (1 CPF) ----------
+  // ---------- CONSULTA AVULSA (1 CPF ou 1 título) ----------
   function bindAvulsa() {
     var input = $('#avulsa-cpf');
     input.addEventListener('input', function (ev) {
-      var digits = normalizeCPF(ev.target.value).slice(0, 11);
-      var formatted = digits;
-      if (digits.length > 9) formatted = digits.replace(/(\d{3})(\d{3})(\d{3})(\d{0,2})/, '$1.$2.$3-$4');
-      else if (digits.length > 6) formatted = digits.replace(/(\d{3})(\d{3})(\d{0,3})/, '$1.$2.$3');
-      else if (digits.length > 3) formatted = digits.replace(/(\d{3})(\d{0,3})/, '$1.$2');
+      var digits = normalizeCPF(ev.target.value);
+      var max = hasTitulo() ? 12 : 11;
+      digits = digits.slice(0, max);
+      var formatted;
+      if (hasTitulo() && digits.length === 12) {
+        // título de eleitor: "0000 0000 0000"
+        formatted = digits.replace(/(\d{4})(\d{4})(\d{4})/, '$1 $2 $3');
+      } else {
+        formatted = digits;
+        if (digits.length > 9) formatted = digits.replace(/(\d{3})(\d{3})(\d{3})(\d{0,2})/, '$1.$2.$3-$4');
+        else if (digits.length > 6) formatted = digits.replace(/(\d{3})(\d{3})(\d{0,3})/, '$1.$2.$3');
+        else if (digits.length > 3) formatted = digits.replace(/(\d{3})(\d{0,3})/, '$1.$2');
+      }
       ev.target.value = formatted;
     });
     $('#form-avulsa').addEventListener('submit', function (ev) {
@@ -869,14 +884,26 @@
     if (emManutencao()) { setAvulsaMsg(textoManutencao(), 'warn'); return; }
     var raw = $('#avulsa-cpf').value;
     var cpf = normalizeCPF(raw);
-    if (cpf.length !== 11) {
-      setAvulsaMsg('CPF precisa ter 11 dígitos.', 'error');
+    var ehTitulo = false;
+    if (cpf.length === 12 && hasTitulo()) {
+      // título de eleitor: dígitos 9-10 são o código da UF (01–28). O TSE
+      // valida o resto server-side ("Dado inválido") — não rejeitar à toa.
+      var ufTitulo = parseInt(cpf.slice(8, 10), 10);
+      if (ufTitulo < 1 || ufTitulo > 28) {
+        setAvulsaMsg('Título inválido (código de UF não existe).', 'error');
+        return;
+      }
+      ehTitulo = true;
+    } else if (cpf.length !== 11) {
+      setAvulsaMsg(hasTitulo()
+        ? 'CPF (11 dígitos) ou título de eleitor (12 dígitos).'
+        : 'CPF precisa ter 11 dígitos.', 'error');
       return;
-    }
-    if (!validateCPF(cpf)) {
+    } else if (!validateCPF(cpf)) {
       setAvulsaMsg('CPF inválido (dígitos verificadores não conferem).', 'error');
       return;
     }
+    var docLabel = ehTitulo ? 'Título' : 'CPF';
     var celular = '';
     if (hasCelular()) {
       var celInput = $('#avulsa-cel');
@@ -898,9 +925,10 @@
             return null;
           });
         }
-        setAvulsaMsg('⏳ Enviando CPF para a fila…', 'pending');
+        setAvulsaMsg('⏳ Enviando ' + docLabel.toLowerCase() + ' para a fila…', 'pending');
         return ensureAvulsaBatch().then(function (batchId) {
           var payload = { batch_id: batchId, cpf: cpf };
+          if (ehTitulo) payload.tipo_entrada = 'titulo';
           if (hasCelular() && celular) payload.celular = celular;
           return state.client
             .from('voter_records')
@@ -921,7 +949,9 @@
           });
         }
         var recordId = res.data[0].id;
-        setAvulsaMsg('⏳ Consultando CPF ' + formatCPF(cpf) + ' no TSE… O resultado aparece na tabela abaixo em segundos a alguns minutos.', 'pending');
+        setAvulsaMsg('⏳ Consultando ' + docLabel + ' ' + (ehTitulo ? cpf.replace(/(\d{4})(\d{4})(\d{4})/, '$1 $2 $3') : formatCPF(cpf))
+          + ' no TSE…' + (ehTitulo ? ' (por título: só a aptidão — zona/seção não saem nessa modalidade.)' : '')
+          + ' O resultado aparece na tabela abaixo em segundos a alguns minutos.', 'pending');
         $('#avulsa-cpf').value = '';
         if (hasCelular() && $('#avulsa-cel')) $('#avulsa-cel').value = '';
         // recarrega lotes e já joga o cliente pro lote avulso

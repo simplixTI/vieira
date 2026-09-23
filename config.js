@@ -7,6 +7,7 @@
     // Features por tenant. Override no portal específico do cliente.
     FEATURES: {
       celular: false,   // Leo Vieira Filho seta true no config.js dele
+      titulo: true,     // avulsa aceita título de eleitor (12 dígitos, só aptidão)
     },
 
     // ── MODO MANUTENÇÃO ──────────────────────────────────────────────────

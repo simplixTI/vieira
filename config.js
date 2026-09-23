@@ -18,7 +18,7 @@
     // PRA RELIGAR: `ativo: false` aqui, bump do ?v= no index.html, deploy.
     // Não precisa mexer em app.js. Lembre dos DOIS portais.
     MANUTENCAO: {
-      ativo: true,
+      ativo: false,
       mensagem: 'O TSE ativou uma proteção que bloqueia consultas automáticas, '
         + 'e as verificações estão pausadas até o serviço ser restabelecido. '
         + 'Os resultados já concluídos continuam disponíveis aqui e podem ser '

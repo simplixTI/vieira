@@ -74,7 +74,7 @@
 
   var LOOKUP_CHUNK = 500;   // ~6 KB de URL; blocos maiores o PostgREST recusa
 
-  function buscarJaConsultados(cpfs, onProgress) {
+  function buscarJaConsultados(cpfs, onProgress, onRetry) {
     // Usa a função cpfs_ja_consultados() do banco em vez de consultar a tabela:
     // a conta tem vários logins e o RLS esconde de cada um os lotes dos outros.
     // Consultar direto só acharia os CPFs do próprio login e deixaria passar
@@ -88,14 +88,17 @@
     for (var i = 0; i < cpfs.length; i += LOOKUP_CHUNK) {
       (function (slice) {
         chain = chain.then(function () {
-          return state.client
-            .rpc('cpfs_ja_consultados', { p_cpfs: slice })
-            .then(function (res) {
-              if (res.error) throw res.error;
-              (res.data || []).forEach(function (r) { achados[r.cpf] = r; });
-              feitos += slice.length;
-              if (onProgress) onProgress(Math.min(feitos, cpfs.length), cpfs.length);
-            });
+          // Um arquivo grande vira várias chamadas seguidas; uma falha de rede
+          // no meio descartaria o arquivo inteiro e o cliente teria de escolhê-lo
+          // de novo. Retry aqui também.
+          return comRetry(
+            chamada(function () { return state.client.rpc('cpfs_ja_consultados', { p_cpfs: slice }); }),
+            onRetry
+          ).then(function (res) {
+            (res.data || []).forEach(function (r) { achados[r.cpf] = r; });
+            feitos += slice.length;
+            if (onProgress) onProgress(Math.min(feitos, cpfs.length), cpfs.length);
+          });
         });
       })(cpfs.slice(i, i + LOOKUP_CHUNK));
     }
@@ -238,6 +241,55 @@
     return false;
   }
 
+  // ---------- resiliência de rede ----------
+  // "TypeError: Failed to fetch" é falha de TRANSPORTE: o navegador não recebeu
+  // resposta nenhuma (queda de rede, ou conexão keep-alive que o servidor já
+  // fechou — e o Chrome não repete POST sozinho, porque POST não é idempotente).
+  // Sem retry, um piscar de rede joga fora o lote inteiro e obriga o cliente a
+  // refazer o arquivo todo, pré-check e tudo. Foi o que aconteceu em 23/09.
+  //
+  // Recusa do BANCO nunca cai aqui: ela volta com `code` ('PGRST102', '23505',
+  // 'P0001'…) e mensagem de negócio. O postgrest-js embrulha falha de fetch em
+  // { message: 'TypeError: Failed to fetch', details: <stack>, hint: '', code: '' } —
+  // code vazio + mensagem de rede é a assinatura exata do transporte.
+  // Retentar um erro de negócio só repetiria a mesma recusa 4x.
+
+  var RETRY_TENTATIVAS = 4;      // 1 original + 3 repetições
+  var RETRY_BASE_MS = 800;       // espera 0,8s → 1,6s → 3,2s
+
+  function ehFalhaDeTransporte(err) {
+    if (!err || err.code) return false;
+    var msg = String((err && err.message) || '');
+    // cobre Chrome ("Failed to fetch"), Firefox ("NetworkError when attempting
+    // to fetch resource") e Safari ("Load failed").
+    return /failed to fetch|fetcherror|networkerror|network request failed|load failed/i.test(msg);
+  }
+
+  function comRetry(fazer, aoEsperar) {
+    var tentativa = 0;
+    function tentar() {
+      return fazer().catch(function (err) {
+        tentativa++;
+        if (tentativa >= RETRY_TENTATIVAS || !ehFalhaDeTransporte(err)) throw err;
+        var espera = RETRY_BASE_MS * Math.pow(2, tentativa - 1);
+        if (aoEsperar) aoEsperar(tentativa, espera);
+        return new Promise(function (ok) { setTimeout(ok, espera); }).then(tentar);
+      });
+    }
+    return tentar();
+  }
+
+  // Executa uma chamada do supabase-js já transformando res.error em exceção,
+  // para que o comRetry consiga enxergá-la.
+  function chamada(fazer) {
+    return function () {
+      return fazer().then(function (res) {
+        if (res && res.error) throw res.error;
+        return res;
+      });
+    };
+  }
+
   // ---------- AUTH ----------
   function bindAuth() {
     state.client.auth.onAuthStateChange(function (_event, session) {
@@ -337,6 +389,9 @@
             if (total > LOOKUP_CHUNK) {
               setMsg($('#upload-error'), 'Verificando CPFs já consultados… ' + feitos + ' de ' + total);
             }
+          }, function (n, espera) {
+            setMsg($('#upload-error'), 'Rede instável — tentando de novo (' + n + '/3) em '
+              + Math.round(espera / 1000) + 's…');
           }).then(function (achados) { return { achados: achados, lotes: lotes }; });
         });
       })
@@ -519,32 +574,83 @@
     $('#upload-progress-label').textContent = 'Criando lote…';
 
     var batchId = null;
+    var total = pending.records.length;
+    var comCelular = hasCelular();
 
-    state.client
-      .from('batches')
-      .insert({ filename: pending.filename, total: pending.records.length, status: 'processing', user_id: state.session.user.id })
-      .select('id')
-      .single()
+    function progresso(texto) { $('#upload-progress-label').textContent = texto; }
+
+    // Repetir o insert do lote às cegas pode DUPLICAR: se a resposta se perdeu
+    // depois de o servidor gravar, a 2ª tentativa cria um segundo lote e o
+    // primeiro fica fantasma no dashboard ("0 de N", em 'processing' pra
+    // sempre). Por isso, da 2ª tentativa em diante, procura antes o lote que a
+    // anterior pode ter criado. Filename+total+3min identificam sem ambiguidade:
+    // se o lote anterior tivesse mesmo entrado inteiro, estes CPFs já estariam
+    // consultados e o pré-check não teria deixado nenhum chegar aqui.
+    //
+    // Os blocos de voter_records não precisam disso: o índice único
+    // (conta_id, cpf) + o trigger de dedupe descartam a repetição em silêncio,
+    // então reenviar um bloco é inócuo por construção.
+    var desde = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+    var jaTentouCriar = false;
+
+    function inserirLote() {
+      return state.client
+        .from('batches')
+        .insert({ filename: pending.filename, total: total, status: 'processing', user_id: state.session.user.id })
+        .select('id')
+        .single();
+    }
+
+    function criarLote() {
+      if (!jaTentouCriar) { jaTentouCriar = true; return inserirLote(); }
+      return state.client
+        .from('batches')
+        .select('id')
+        .eq('filename', pending.filename)
+        .eq('user_id', state.session.user.id)
+        .eq('total', total)
+        .gte('created_at', desde)
+        .limit(1)
+        .then(function (res) {
+          if (res.error) throw res.error;
+          if (res.data && res.data.length) return { data: res.data[0], error: null };
+          return inserirLote();
+        });
+    }
+
+    comRetry(
+      chamada(criarLote),
+      function (n, espera) { progresso('Rede instável — tentando criar o lote de novo (' + n + '/3) em ' + Math.round(espera / 1000) + 's…'); }
+    )
       .then(function (res) {
-        if (res.error) throw res.error;
         batchId = res.data.id;
 
         var chain = Promise.resolve();
-        var totalChunks = Math.ceil(pending.records.length / CHUNK_SIZE);
+        var totalChunks = Math.ceil(total / CHUNK_SIZE);
         for (var i = 0; i < totalChunks; i++) {
           (function (idx) {
             chain = chain.then(function () {
               var slice = pending.records.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
               var payload = slice.map(function (rec) {
+                // ⚠️ TODAS as linhas do bloco precisam ter EXATAMENTE as mesmas
+                // chaves: o PostgREST recusa o bloco inteiro com PGRST102
+                // ("All object keys must match") se uma tiver 'celular' e outra
+                // não. Por isso manda null em vez de omitir a chave — o trigger
+                // de dedupe já trata null/'' com coalesce(nullif(...)).
                 var payloadItem = { batch_id: batchId, cpf: rec.cpf, nome: rec.nome };
-                if (hasCelular() && rec.celular) payloadItem.celular = rec.celular;
+                if (comCelular) payloadItem.celular = rec.celular || null;
                 return payloadItem;
               });
-              return state.client.from('voter_records').insert(payload).then(function (r) {
-                if (r.error) throw r.error;
-                var done = Math.min((idx + 1) * CHUNK_SIZE, pending.records.length);
-                fill.style.width = Math.round((done / pending.records.length) * 100) + '%';
-                $('#upload-progress-label').textContent = 'Enviando registros… ' + done + ' de ' + pending.records.length;
+              var done = Math.min((idx + 1) * CHUNK_SIZE, total);
+              return comRetry(
+                chamada(function () { return state.client.from('voter_records').insert(payload); }),
+                function (n, espera) {
+                  progresso('Rede instável — reenviando o bloco ' + (idx + 1) + '/' + totalChunks
+                    + ' (' + n + '/3) em ' + Math.round(espera / 1000) + 's…');
+                }
+              ).then(function () {
+                fill.style.width = Math.round((done / total) * 100) + '%';
+                progresso('Enviando registros… ' + done + ' de ' + total);
               });
             });
           })(i);
@@ -558,15 +664,36 @@
         return loadBatches(batchId);
       })
       .catch(function (err) {
-        // compensação: remove o lote se a inserção dos registros falhou
-        var cleanup = batchId
-          ? state.client.from('batches').delete().eq('id', batchId)
-          : Promise.resolve();
-        cleanup.finally(function () {
+        // Compensação: remove o lote se a inserção dos registros falhou.
+        // O delete pode falhar JUNTO (a mesma queda de rede derruba os dois) —
+        // e aí o lote ficou no banco, o worker vai processar os registros que
+        // entraram e cobrar por eles. Dizer "descartado" nesse caso é mentira,
+        // então o resultado da limpeza decide a mensagem.
+        comRetry(
+          chamada(function () {
+            return batchId
+              ? state.client.from('batches').delete().eq('id', batchId)
+              : Promise.resolve({ error: null });
+          })
+        ).then(
+          function () { return true; },
+          function () { return false; }
+        ).then(function (descartado) {
           hide($('#upload-progress'));
-          setMsg($('#upload-error'), 'Falha ao enviar o lote: ' + (err && err.message ? err.message : 'erro inesperado.') + ' O lote foi descartado.');
+          var motivo = (err && err.message) ? err.message : 'erro inesperado.';
+          if (descartado) {
+            setMsg($('#upload-error'), 'Falha ao enviar o lote: ' + motivo
+              + ' Nada foi gravado e nenhuma consulta foi gasta — o lote foi descartado.'
+              + ' Clique em "Confirmar envio" para tentar de novo.');
+          } else {
+            setMsg($('#upload-error'), 'Falha ao enviar o lote: ' + motivo
+              + ' ⚠️ Além disso, não foi possível desfazer o lote no servidor:'
+              + ' parte dos registros pode ter ficado gravada. Confira o lote "'
+              + pending.filename + '" no dashboard antes de reenviar, e avise o suporte.');
+          }
           show($('#upload-summary'));
           btn.disabled = false;
+          handleAuthError(err);
         });
       });
   }

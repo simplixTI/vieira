@@ -141,6 +141,7 @@ body {
 .stat-card.status-done .stat-card-value,
 .stat-card.eleg-apto .stat-card-value { color: var(--ok); }
 .stat-card.eleg-regularizar_tse .stat-card-value { color: var(--warn); }
+.stat-card.eleg-menor_de_idade .stat-card-value { color: var(--muted); }
 
 /* ---------- formulários ---------- */
 .field { margin-bottom: 16px; }
@@ -402,6 +403,7 @@ tbody tr:hover { background: #f0f5fb; }
 .eleg-inapto_cancelado, .eleg-inapto_suspenso { color: var(--bad); }
 .eleg-inapto_transferido { color: var(--bad); }
 .eleg-regularizar_tse { color: var(--warn); }
+.eleg-menor_de_idade { color: var(--muted); }
 
 .pagination {
   display: flex;

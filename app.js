@@ -1243,6 +1243,7 @@
     var map = {
       apto: 'Apto', inapto_cancelado: 'Inapto — cancelado', inapto_suspenso: 'Inapto — suspenso',
       inapto_transferido: 'Inapto — transferido', regularizar_tse: 'Regularizar no TSE',
+      menor_de_idade: 'Menor de 16 anos',
     };
     return map[s] || s || '—';
   }
@@ -1283,7 +1284,7 @@
   function loadElegCards() {
     var b = state.currentBatch;
     if (!b) return;
-    var elegibilidades = ['apto', 'inapto_cancelado', 'inapto_suspenso', 'inapto_transferido', 'regularizar_tse'];
+    var elegibilidades = ['apto', 'inapto_cancelado', 'inapto_suspenso', 'inapto_transferido', 'regularizar_tse', 'menor_de_idade'];
     var wrap = $('#eleg-cards');
     wrap.textContent = '';
     var queries = elegibilidades.map(function (e) {
@@ -1303,7 +1304,7 @@
         .from('voter_records')
         .select('elegibilidade')
         .eq('batch_id', b.id)
-        .not('elegibilidade', 'in', '("apto","inapto_cancelado","inapto_suspenso","inapto_transferido","regularizar_tse")')
+        .not('elegibilidade', 'in', '("apto","inapto_cancelado","inapto_suspenso","inapto_transferido","regularizar_tse","menor_de_idade")')
         .then(function (res2) {
           if (res2.error || !res2.data) return;
           var other = {};
